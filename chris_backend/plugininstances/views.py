@@ -15,7 +15,7 @@ from .models import BoolParameter, PathParameter
 from .serializers import PARAMETER_SERIALIZERS
 from .serializers import GenericParameterSerializer
 from .serializers import PluginInstanceSerializer, PluginInstanceFileSerializer
-from .permissions import IsRelatedFeedOwnerOrChris
+from .permissions import IsRelatedFeedOwnerOrChris, IsOwnerOrChrisOrReadOnly
 from .services.manager import PluginAppManager
 
 
@@ -126,13 +126,13 @@ class AllPluginInstanceListQuerySearch(generics.ListAPIView):
     filterset_class = PluginInstanceFilter
 
         
-class PluginInstanceDetail(generics.RetrieveAPIView):
+class PluginInstanceDetail(generics.RetrieveUpdateAPIView):
     """
     A plugin instance view.
     """
     serializer_class = PluginInstanceSerializer
     queryset = PluginInstance.objects.all()
-    permission_classes = (permissions.IsAuthenticated,)
+    permission_classes = (permissions.IsAuthenticated, IsOwnerOrChrisOrReadOnly)
 
     def retrieve(self, request, *args, **kwargs):
         """
@@ -141,7 +141,32 @@ class PluginInstanceDetail(generics.RetrieveAPIView):
         instance = self.get_object()
         PluginAppManager.check_plugin_app_exec_status(instance)
         response = super(PluginInstanceDetail, self).retrieve(request, *args, **kwargs)
-        return response
+        template_data = {'title': '', 'status': ''}
+        return services.append_collection_template(response, template_data)
+
+    def update(self, request, *args, **kwargs):
+        """
+        Overriden to remove descriptors that are not allowed to be updated before
+        serializer validation.
+        """
+        data = self.request.data
+        data.pop('gpu_limit', None)
+        data.pop('number_of_workers', None)
+        data.pop('cpu_limit', None)
+        data.pop('memory_limit', None)
+        if 'status' in data and data['status'] != 'cancelled':
+            data.pop('status')
+        return super(PluginInstanceDetail, self).update(request, *args, **kwargs)
+
+    def perform_update(self, serializer):
+        """
+        Overriden to notify the satellite services that the user wants to cancel
+        the plugin instance execution.
+        """
+        if 'status' in self.request.data:
+            instance = self.get_object()
+            PluginAppManager.cancel_plugin_app_exec(instance)
+        super(PluginInstanceDetail, self).perform_update(serializer)
 
 
 class PluginInstanceDescendantList(generics.ListAPIView):

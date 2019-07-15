@@ -15,7 +15,7 @@ from plugins.fields import CPUField, MemoryField
 from pipelineinstances.models import PipelineInstance
 
 
-STATUS_TYPES = ['started', 'finishedSuccessfully', 'finishedWithError']
+STATUS_TYPES = ['started', 'finishedSuccessfully', 'finishedWithError', 'cancelled']
 
 
 class PluginInstance(models.Model):
