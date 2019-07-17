@@ -10,6 +10,7 @@ from .models import PipelineInstance
 class PipelineInstanceSerializer(serializers.HyperlinkedModelSerializer):
     pipeline_id = serializers.ReadOnlyField(source='pipeline.id')
     previous_plugin_inst_id = serializers.IntegerField(min_value=1, write_only=True)
+    owner_username = serializers.ReadOnlyField(source='owner.username')
     pipeline = serializers.HyperlinkedRelatedField(view_name='pipeline-detail',
                                                    read_only=True)
     plugin_instances = serializers.HyperlinkedIdentityField(
@@ -17,7 +18,7 @@ class PipelineInstanceSerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = PipelineInstance
-        fields = ('url', 'id', 'title', 'pipeline_id', 'description',
+        fields = ('url', 'id', 'title', 'pipeline_id', 'owner_username', 'description',
                   'previous_plugin_inst_id', 'pipeline', 'plugin_instances')
 
     def create(self, validated_data):

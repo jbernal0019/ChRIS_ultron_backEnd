@@ -121,7 +121,9 @@ class PipelineInstanceListViewTests(ViewTests):
 
     def test_pipeline_instance_list_success(self):
         pipeline = Pipeline.objects.get(name=self.pipeline_name)
-        PipelineInstance.objects.get_or_create(title="PipelineInst1", pipeline=pipeline)
+        owner = User.objects.get(username=self.username)
+        PipelineInstance.objects.get_or_create(title="PipelineInst1", pipeline=pipeline,
+                                               owner=owner)
         self.client.login(username=self.username, password=self.password)
         response = self.client.get(self.create_read_url)
         self.assertContains(response, "PipelineInst1")
@@ -145,8 +147,11 @@ class PipelineInstanceListQuerySearchViewTests(ViewTests):
 
     def test_pipeline_instance_query_search_list_success(self):
         pipeline = Pipeline.objects.get(name=self.pipeline_name)
-        PipelineInstance.objects.get_or_create(title="PipelineInst1", pipeline=pipeline)
-        PipelineInstance.objects.get_or_create(title="PipelineMyInst", pipeline=pipeline)
+        owner = User.objects.get(username=self.username)
+        PipelineInstance.objects.get_or_create(title="PipelineInst1", pipeline=pipeline,
+                                               owner=owner)
+        PipelineInstance.objects.get_or_create(title="PipelineMyInst", pipeline=pipeline,
+                                               owner=owner)
         self.client.login(username=self.username, password=self.password)
         response = self.client.get(self.query_url1)
         # response should only contain the instances that match the query
@@ -169,8 +174,10 @@ class PipelineInstanceDetailViewTests(ViewTests):
     def setUp(self):
         super(PipelineInstanceDetailViewTests, self).setUp()
         pipeline = Pipeline.objects.get(name=self.pipeline_name)
+        owner = User.objects.get(username=self.username)
         (pipeline_inst, tf) = PipelineInstance.objects.get_or_create(title="PipelineInst1",
-                                                                     pipeline=pipeline)
+                                                                     pipeline=pipeline,
+                                                                     owner=owner)
         self.read_url = reverse("pipelineinstance-detail", kwargs={"pk": pipeline_inst.id})
 
     def test_pipeline_instance_detail_success(self):
@@ -191,8 +198,10 @@ class PipelineInstancePluginInstanceListViewTests(ViewTests):
     def setUp(self):
         super(PipelineInstancePluginInstanceListViewTests, self).setUp()
         pipeline = Pipeline.objects.get(name=self.pipeline_name)
+        owner = User.objects.get(username=self.username)
         (self.pipeline_inst, tf) = PipelineInstance.objects.get_or_create(title="PipelineInst1",
-                                                                     pipeline=pipeline)
+                                                                          pipeline=pipeline,
+                                                                          owner=owner)
         self.list_url = reverse("pipelineinstance-plugininstance-list",
                                 kwargs={"pk": self.pipeline_inst.id})
 

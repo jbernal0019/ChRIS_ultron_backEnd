@@ -11,6 +11,7 @@ from plugininstances.serializers import PARAMETER_SERIALIZERS
 
 from .models import PipelineInstance, PipelineInstanceFilter
 from .serializers import PipelineInstanceSerializer
+from .permissions import IsOwnerOrChrisOrReadOnly
 
 
 class PipelineInstanceList(generics.ListCreateAPIView):
@@ -59,7 +60,7 @@ class PipelineInstanceList(generics.ListCreateAPIView):
                 pip_id_queue.append(id)
                 plugin_inst_queue.append(plugin_inst_dict)
         # if no validation errors at this point then save to the DB
-        self.pipeline_inst = serializer.save(pipeline=pipeline)
+        self.pipeline_inst = serializer.save(owner=self.request.user, pipeline=pipeline)
         for plg_inst_dict in plugin_instances:
             self.save_plugin_inst(plg_inst_dict)
 
@@ -175,13 +176,21 @@ class AllPipelineInstanceListQuerySearch(generics.ListAPIView):
     filterset_class = PipelineInstanceFilter
 
 
-class PipelineInstanceDetail(generics.RetrieveAPIView):
+class PipelineInstanceDetail(generics.RetrieveUpdateDestroyAPIView):
     """
     A pipeline instance view.
     """
     serializer_class = PipelineInstanceSerializer
     queryset = PipelineInstance.objects.all()
-    permission_classes = (permissions.IsAuthenticated,)
+    permission_classes = (permissions.IsAuthenticated, IsOwnerOrChrisOrReadOnly,)
+
+    def retrieve(self, request, *args, **kwargs):
+        """
+        Overriden to append a collection+json template to the response.
+        """
+        response = super(PipelineInstanceDetail, self).retrieve(request, *args, **kwargs)
+        template_data = {'title': '', 'description': ''}
+        return services.append_collection_template(response, template_data)
 
 
 class PipelineInstancePluginInstanceList(generics.ListAPIView):

@@ -97,6 +97,13 @@ class PluginInstanceSerializer(serializers.HyperlinkedModelSerializer):
                     {'previous_id': [err_str % previous_id]})
         return previous
 
+    def validate_status(self, status):
+        if self.instance and (status != 'cancelled' or
+                              self.instance.status not in ['started', 'cancelled']):
+            raise serializers.ValidationError(["Can not change status from %s to %s." %
+                                               (self.instance.status, status)])
+        return status
+
     def validate_gpu_limit(self, gpu_limit):
         plugin = self.context['view'].get_object()
         self.validate_value_within_interval(gpu_limit,
