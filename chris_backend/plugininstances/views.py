@@ -1,5 +1,7 @@
 
-from rest_framework import generics, permissions
+from rest_framework import generics
+from rest_framework import permissions
+from rest_framework import status
 from rest_framework.reverse import reverse
 from rest_framework.response import Response
 from rest_framework.serializers import ValidationError
@@ -12,6 +14,7 @@ from .models import PluginInstance, PluginInstanceFilter
 from .models import PluginInstanceFile, PluginInstanceFileFilter
 from .models import StrParameter, FloatParameter, IntParameter
 from .models import BoolParameter, PathParameter
+from .models import STATUS_TYPES
 from .serializers import PARAMETER_SERIALIZERS
 from .serializers import GenericParameterSerializer
 from .serializers import PluginInstanceSerializer, PluginInstanceFileSerializer
@@ -26,6 +29,14 @@ class PluginInstanceList(generics.ListCreateAPIView):
     serializer_class = PluginInstanceSerializer
     queryset = Plugin.objects.all()
     permission_classes = (permissions.IsAuthenticated,)
+
+    def create(self, request, *args, **kwargs):
+        """
+        Overriden to remove 'status' from the request as it must take the default
+        value on creation.
+        """
+        self.request.data.pop('status', None)
+        return super(PluginInstanceList, self).create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         """
@@ -126,17 +137,17 @@ class AllPluginInstanceListQuerySearch(generics.ListAPIView):
     filterset_class = PluginInstanceFilter
 
         
-class PluginInstanceDetail(generics.RetrieveUpdateAPIView):
+class PluginInstanceDetail(generics.RetrieveUpdateDestroyAPIView):
     """
     A plugin instance view.
     """
     serializer_class = PluginInstanceSerializer
     queryset = PluginInstance.objects.all()
-    permission_classes = (permissions.IsAuthenticated, IsOwnerOrChrisOrReadOnly)
+    permission_classes = (permissions.IsAuthenticated, IsOwnerOrChrisOrReadOnly,)
 
     def retrieve(self, request, *args, **kwargs):
         """
-        Overloaded method to check a plugin's instance status.
+        Overriden to check a plugin's instance status.
         """
         instance = self.get_object()
         PluginAppManager.check_plugin_app_exec_status(instance)
@@ -154,8 +165,6 @@ class PluginInstanceDetail(generics.RetrieveUpdateAPIView):
         data.pop('number_of_workers', None)
         data.pop('cpu_limit', None)
         data.pop('memory_limit', None)
-        if 'status' in data and data['status'] != 'cancelled':
-            data.pop('status')
         return super(PluginInstanceDetail, self).update(request, *args, **kwargs)
 
     def perform_update(self, serializer):
@@ -165,8 +174,19 @@ class PluginInstanceDetail(generics.RetrieveUpdateAPIView):
         """
         if 'status' in self.request.data:
             instance = self.get_object()
-            PluginAppManager.cancel_plugin_app_exec(instance)
+            if instance.status == 'started':
+                PluginAppManager.cancel_plugin_app_exec(instance)
         super(PluginInstanceDetail, self).perform_update(serializer)
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Overriden to check that plugin instance's status is not 'started' before
+        attempting to delete it.
+        """
+        instance = self.get_object()
+        if instance.status == 'started':
+            return Response(status=status.HTTP_304_NOT_MODIFIED)
+        return super(PluginInstanceDetail, self).destroy(request, *args, **kwargs)
 
 
 class PluginInstanceDescendantList(generics.ListAPIView):

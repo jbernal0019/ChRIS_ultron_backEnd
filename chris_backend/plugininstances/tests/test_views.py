@@ -3,7 +3,7 @@ import logging
 import json
 import time
 import io
-from unittest import mock
+from unittest import mock, skip
 
 from django.test import TestCase, tag
 from django.urls import reverse
@@ -169,14 +169,15 @@ class PluginInstanceDetailViewTests(ViewTests):
         user = User.objects.get(username=self.username)
         (self.pl_inst, tf) = PluginInstance.objects.get_or_create(plugin=plugin, owner=user,
                                                 compute_resource=plugin.compute_resource)
-        self.read_url = reverse("plugininstance-detail", kwargs={"pk": self.pl_inst.id})
+        self.read_update_delete_url = reverse("plugininstance-detail",
+                                              kwargs={"pk": self.pl_inst.id})
 
     def test_plugin_instance_detail_success(self):
         with mock.patch.object(views.PluginAppManager, 'check_plugin_app_exec_status',
                                return_value=None) as check_plugin_app_exec_status_mock:
             # make API request
             self.client.login(username=self.username, password=self.password)
-            response = self.client.get(self.read_url)
+            response = self.client.get(self.read_update_delete_url)
             self.assertContains(response, "pacspull")
 
             # check that manager's check_plugin_app_exec_status method was called with
@@ -221,7 +222,8 @@ class PluginInstanceDetailViewTests(ViewTests):
         user = User.objects.get(username=self.username)
         (pl_inst, tf) = PluginInstance.objects.get_or_create(plugin=plugin, owner=user,
                                     compute_resource=plugin.compute_resource)
-        self.read_url = reverse("plugininstance-detail", kwargs={"pk": pl_inst.id})
+        self.read_update_delete_url = reverse("plugininstance-detail",
+                                              kwargs={"pk": pl_inst.id})
 
         # run the plugin instance
         PluginAppManager.run_plugin_app(  pl_inst,
@@ -232,7 +234,7 @@ class PluginInstanceDetailViewTests(ViewTests):
 
         # make API GET request
         self.client.login(username=self.username, password=self.password)
-        response = self.client.get(self.read_url)
+        response = self.client.get(self.read_update_delete_url)
         self.assertContains(response, "simplefsapp")
 
         # In the following we keep checking the status until the job ends with
@@ -242,7 +244,7 @@ class PluginInstanceDetailViewTests(ViewTests):
         currentLoop     = 1
         b_checkAgain    = True
         while b_checkAgain:
-            response            = self.client.get(self.read_url)
+            response            = self.client.get(self.read_update_delete_url)
             str_responseStatus  = response.data['status']
             if str_responseStatus == 'finishedSuccessfully':
                 b_checkAgain = False
@@ -254,8 +256,57 @@ class PluginInstanceDetailViewTests(ViewTests):
         self.assertContains(response, "finishedSuccessfully")
 
     def test_plugin_instance_detail_failure_unauthenticated(self):
-        response = self.client.get(self.read_url)
+        response = self.client.get(self.read_update_delete_url)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @skip("Under development ...")
+    def test_plugin_instance_update_success(self):
+        put = json.dumps({
+            "template": {"data": [{"name": "title", "value": "Test plugin instance"}]}})
+        self.client.login(username=self.username, password=self.password)
+        response = self.client.put(self.read_update_delete_url, data=put,
+                                   content_type=self.content_type)
+        self.assertContains(response, "Test plugin instance")
+
+    @skip("Under development ...")
+    def test_plugin_instance_update_failure_cannot_update_status_when_current_status_is_started(self):
+        put = json.dumps({
+            "template": {"data": [{"name": "title", "value": "Test plugin instance"}]}})
+        self.client.login(username=self.username, password=self.password)
+        response = self.client.put(self.read_update_delete_url, data=put,
+                                   content_type=self.content_type)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @skip("Under development ...")
+    def test_plugin_update_failure_unauthenticated(self):
+        response = self.client.put(self.read_update_delete_url, data={},
+                                   content_type=self.content_type)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @skip("Under development ...")
+    def test_plugin_update_failure_access_denied(self):
+        self.client.login(username='another', password='another-pass')
+        response = self.client.put(self.read_update_delete_url, data={},
+                                   content_type=self.content_type)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    @skip("Under development ...")
+    def test_plugin_delete_success(self):
+        self.client.login(username=self.username, password=self.password)
+        response = self.client.delete(self.read_update_delete_url)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(Plugin.objects.count(), 0)
+
+    @skip("Under development ...")
+    def test_plugin_delete_failure_unauthenticated(self):
+        response = self.client.delete(self.read_update_delete_url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @skip("Under development ...")
+    def test_plugin_delete_failure_access_denied(self):
+        self.client.login(username='another', password='another-pass')
+        response = self.client.delete(self.read_update_delete_url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class PluginInstanceListQuerySearchViewTests(ViewTests):
