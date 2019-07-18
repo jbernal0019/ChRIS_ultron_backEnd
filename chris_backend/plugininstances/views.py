@@ -14,7 +14,6 @@ from .models import PluginInstance, PluginInstanceFilter
 from .models import PluginInstanceFile, PluginInstanceFileFilter
 from .models import StrParameter, FloatParameter, IntParameter
 from .models import BoolParameter, PathParameter
-from .models import STATUS_TYPES
 from .serializers import PARAMETER_SERIALIZERS
 from .serializers import GenericParameterSerializer
 from .serializers import PluginInstanceSerializer, PluginInstanceFileSerializer
