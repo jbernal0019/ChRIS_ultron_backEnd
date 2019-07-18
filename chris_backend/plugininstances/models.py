@@ -12,6 +12,7 @@ import swiftclient
 from feeds.models import Feed
 from plugins.models import ComputeResource, Plugin, PluginParameter
 from plugins.fields import CPUField, MemoryField
+from plugins.fields import MemoryInt, CPUInt
 from pipelineinstances.models import PipelineInstance
 
 
@@ -55,11 +56,12 @@ class PluginInstance(models.Model):
                 self.feed = self._save_feed()
             if self.plugin.type == 'ds':
                 self.feed = self.previous.feed
+        self._set_compute_defaults()
         super(PluginInstance, self).save(*args, **kwargs)
             
     def _save_feed(self):
         """
-        Custom method to create and save a new feed to the DB.
+        Custom internal method to create and save a new feed to the DB.
         """
         feed = Feed()
         feed.name = self.plugin.name
@@ -67,6 +69,19 @@ class PluginInstance(models.Model):
         feed.owner.set([self.owner])
         feed.save()
         return feed
+
+    def _set_compute_defaults(self):
+        """
+        Custom internal method to set compute-related defaults.
+        """
+        if not self.cpu_limit:
+            self.cpu_limit = CPUInt(self.plugin.min_cpu_limit)
+        if not self.memory_limit:
+            self.memory_limit = MemoryInt(self.plugin.min_memory_limit)
+        if not self.number_of_workers:
+            self.number_of_workers = self.plugin.min_number_of_workers
+        if not self.gpu_limit:
+            self.gpu_limit = self.plugin.min_gpu_limit
 
     def get_root_instance(self):
         """
