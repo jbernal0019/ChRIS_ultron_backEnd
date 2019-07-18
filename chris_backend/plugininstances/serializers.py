@@ -7,7 +7,6 @@ from rest_framework.reverse import reverse
 
 from collectionjson.fields import ItemLinkField
 from plugins.models import TYPES
-from plugins.fields import MemoryInt, CPUInt
 
 from .models import PluginInstance, PluginInstanceFile
 from .models import FloatParameter, IntParameter, BoolParameter
@@ -49,23 +48,6 @@ class PluginInstanceSerializer(serializers.HyperlinkedModelSerializer):
                   'owner_username', 'previous', 'feed', 'plugin', 'descendants', 'files',
                   'parameters', 'compute_resource_identifier', 'cpu_limit',
                   'memory_limit', 'number_of_workers','gpu_limit')
-
-    def create(self, validated_data):
-        """
-        Overriden to provide compute-related defaults before creating a new plugin
-        instance.
-        """
-        plugin = self.context['view'].get_object()
-
-        if 'gpu_limit' not in validated_data:
-            validated_data['gpu_limit'] = plugin.min_gpu_limit
-        if 'number_of_workers' not in validated_data:
-            validated_data['number_of_workers'] = plugin.min_number_of_workers
-        if 'cpu_limit' not in validated_data:
-            validated_data['cpu_limit'] = CPUInt(plugin.min_cpu_limit)
-        if 'memory_limit' not in validated_data:
-            validated_data['memory_limit'] = MemoryInt(plugin.min_memory_limit)
-        return super(PluginInstanceSerializer, self).create(validated_data)
 
     def validate_previous(self, previous_id):
         """
