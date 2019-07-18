@@ -259,52 +259,70 @@ class PluginInstanceDetailViewTests(ViewTests):
         response = self.client.get(self.read_update_delete_url)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    @skip("Under development ...")
     def test_plugin_instance_update_success(self):
         put = json.dumps({
-            "template": {"data": [{"name": "title", "value": "Test plugin instance"}]}})
+            "template": {"data": [{"name": "title", "value": "Test instance"},
+                                  {"name": "status", "value": "cancelled"}]}})
+
         self.client.login(username=self.username, password=self.password)
         response = self.client.put(self.read_update_delete_url, data=put,
                                    content_type=self.content_type)
-        self.assertContains(response, "Test plugin instance")
+        self.assertContains(response, "Test instance")
+        self.assertContains(response, "cancelled")
 
-    @skip("Under development ...")
-    def test_plugin_instance_update_failure_cannot_update_status_when_current_status_is_started(self):
+    def test_plugin_instance_update_failure_cannot_update_status_if_current_status_is_not_started_or_cancelled(self):
         put = json.dumps({
-            "template": {"data": [{"name": "title", "value": "Test plugin instance"}]}})
+            "template": {"data": [{"name": "status", "value": "cancelled"}]}})
+
+        self.pl_inst.status = 'finishedSuccessfully'
+        self.pl_inst.save()
         self.client.login(username=self.username, password=self.password)
         response = self.client.put(self.read_update_delete_url, data=put,
                                    content_type=self.content_type)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    @skip("Under development ...")
-    def test_plugin_update_failure_unauthenticated(self):
+    def test_plugin_instance_update_failure_status_can_only_be_changed_to_cancelled(self):
+        put = json.dumps({
+            "template": {"data": [{"name": "status", "value": "finishedSuccessfully"}]}})
+
+        self.client.login(username=self.username, password=self.password)
+        response = self.client.put(self.read_update_delete_url, data=put,
+                                   content_type=self.content_type)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_plugin_instance_update_failure_unauthenticated(self):
         response = self.client.put(self.read_update_delete_url, data={},
                                    content_type=self.content_type)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    @skip("Under development ...")
-    def test_plugin_update_failure_access_denied(self):
-        self.client.login(username='another', password='another-pass')
-        response = self.client.put(self.read_update_delete_url, data={},
+    def test_plugin_instance_update_failure_access_denied(self):
+        put = json.dumps({
+            "template": {"data": [{"name": "status", "value": "cancelled"}]}})
+
+        self.client.login(username=self.other_username, password=self.other_password)
+        response = self.client.put(self.read_update_delete_url, data=put,
                                    content_type=self.content_type)
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
-    @skip("Under development ...")
-    def test_plugin_delete_success(self):
+    def test_plugin_instance_delete_success(self):
+        self.pl_inst.status = 'finishedSuccessfully'
+        self.pl_inst.save()
         self.client.login(username=self.username, password=self.password)
         response = self.client.delete(self.read_update_delete_url)
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertEqual(Plugin.objects.count(), 0)
+        self.assertEqual(PluginInstance.objects.count(), 0)
 
-    @skip("Under development ...")
-    def test_plugin_delete_failure_unauthenticated(self):
+    def test_plugin_instance_delete_failure_cannot_delete__instance_in_started_status(self):
+        self.client.login(username=self.username, password=self.password)
+        response = self.client.delete(self.read_update_delete_url)
+        self.assertEqual(response.status_code, status.HTTP_304_NOT_MODIFIED)
+
+    def test_plugin_instance_delete_failure_unauthenticated(self):
         response = self.client.delete(self.read_update_delete_url)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    @skip("Under development ...")
-    def test_plugin_delete_failure_access_denied(self):
-        self.client.login(username='another', password='another-pass')
+    def test_plugin_instance_delete_failure_access_denied(self):
+        self.client.login(username=self.other_username, password=self.other_password)
         response = self.client.delete(self.read_update_delete_url)
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
