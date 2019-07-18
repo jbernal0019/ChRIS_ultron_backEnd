@@ -9,7 +9,8 @@ from .models import PipelineInstance
 
 class PipelineInstanceSerializer(serializers.HyperlinkedModelSerializer):
     pipeline_id = serializers.ReadOnlyField(source='pipeline.id')
-    previous_plugin_inst_id = serializers.IntegerField(min_value=1, write_only=True)
+    previous_plugin_inst_id = serializers.IntegerField(min_value=1, write_only=True,
+                                                       required=False)
     owner_username = serializers.ReadOnlyField(source='owner.username')
     pipeline = serializers.HyperlinkedRelatedField(view_name='pipeline-detail',
                                                    read_only=True)
@@ -37,8 +38,7 @@ class PipelineInstanceSerializer(serializers.HyperlinkedModelSerializer):
         """
         if not previous_plugin_inst_id:
             raise serializers.ValidationError(
-                {'previous_plugin_inst_id':
-                     ["A previous plugin instance id is required."]})
+                {'previous_plugin_inst_id': ["This field is required."]})
         try:
             pk = int(previous_plugin_inst_id)
             previous_plugin_inst = PluginInstance.objects.get(pk=pk)
