@@ -47,7 +47,7 @@ class PluginInstanceSerializer(serializers.HyperlinkedModelSerializer):
                   'pipeline_inst', 'feed_id', 'start_date', 'end_date', 'status',
                   'owner_username', 'previous', 'feed', 'plugin', 'descendants', 'files',
                   'parameters', 'compute_resource_identifier', 'cpu_limit',
-                  'memory_limit', 'number_of_workers','gpu_limit')
+                  'memory_limit', 'number_of_workers', 'gpu_limit')
 
     def validate_previous(self, previous_id):
         """

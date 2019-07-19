@@ -4,6 +4,7 @@ import django_filters
 from django_filters.rest_framework import FilterSet
 
 from pipelines.models import Pipeline
+from plugins.fields import CPUField, MemoryField
 
 
 class PipelineInstance(models.Model):
@@ -12,6 +13,10 @@ class PipelineInstance(models.Model):
     pipeline = models.ForeignKey(Pipeline, on_delete=models.CASCADE,
                                  related_name='instances')
     owner = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+    cpu_limit = CPUField(null=True)
+    memory_limit = MemoryField(null=True)
+    number_of_workers = models.IntegerField(null=True)
+    gpu_limit = models.IntegerField(null=True)
 
     class Meta:
         ordering = ('pipeline',)

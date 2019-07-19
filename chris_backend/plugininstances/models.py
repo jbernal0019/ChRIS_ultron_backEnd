@@ -15,6 +15,8 @@ from plugins.fields import CPUField, MemoryField
 from plugins.fields import MemoryInt, CPUInt
 from pipelineinstances.models import PipelineInstance
 
+from .services.manager import PluginAppManager
+
 
 STATUS_TYPES = ['started', 'finishedSuccessfully', 'finishedWithError', 'cancelled']
 
@@ -188,6 +190,14 @@ class PluginInstance(models.Model):
             'pollLoop':     pollLoop
         }
 
+    def cancel(self):
+        """
+        Custom method to cancel the execution of this plugin instance.
+        """
+        if self.status == 'started':
+            PluginAppManager.cancel_plugin_app_exec(self)
+            self.status = 'cancelled'
+
 
 class PluginInstanceFilter(FilterSet):
     min_start_date = django_filters.DateFilter(field_name='start_date', lookup_expr='gte')
@@ -197,24 +207,24 @@ class PluginInstanceFilter(FilterSet):
     title = django_filters.CharFilter(field_name='title', lookup_expr='icontains')
     owner_username = django_filters.CharFilter(field_name='owner__username',
                                                lookup_expr='exact')
-    feed_id = django_filters.CharFilter(field_name='feed_id',
-                                               lookup_expr='exact')
+    feed_id = django_filters.CharFilter(field_name='feed_id', lookup_expr='exact')
     root_id = django_filters.CharFilter(method='filter_by_root_id')
-    plugin_id = django_filters.CharFilter(field_name='plugin_id',
-                                               lookup_expr='exact')
+    plugin_id = django_filters.CharFilter(field_name='plugin_id', lookup_expr='exact')
+    pipeline_inst_id = django_filters.CharFilter(field_name='pipeline_inst_id',
+                                                 lookup_expr='exact')
     plugin_name = django_filters.CharFilter(field_name='plugin__name',
-                                               lookup_expr='icontains')
+                                            lookup_expr='icontains')
     plugin_name_exact = django_filters.CharFilter(field_name='plugin__name',
                                                   lookup_expr='exact')
     plugin_version = django_filters.CharFilter(field_name='plugin__version',
-                                                  lookup_expr='exact')
+                                               lookup_expr='exact')
 
     class Meta:
         model = PluginInstance
         fields = ['id', 'min_start_date', 'max_start_date', 'min_end_date',
                   'max_end_date', 'root_id', 'title', 'status', 'owner_username',
                   'feed_id', 'plugin_id', 'plugin_name', 'plugin_name_exact',
-                  'plugin_version']
+                  'plugin_version', 'pipeline_inst_id']
 
     def filter_by_root_id(self, queryset, name, value):
         """

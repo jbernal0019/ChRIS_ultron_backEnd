@@ -91,8 +91,8 @@ class PluginInstanceList(generics.ListCreateAPIView):
         response = services.append_collection_links(response, links)
         # append write template
         param_names = plugin.get_plugin_parameter_names()
-        template_data = {'title': "", 'previous_id': "", 'cpu_limit':"",
-                         'memory_limit':"", 'number_of_workers':"", 'gpu_limit':""}
+        template_data = {'title': "", 'previous_id': "", 'cpu_limit': "",
+                         'memory_limit': "", 'number_of_workers': "", 'gpu_limit': ""}
         for name in param_names:
             template_data[name] = ""
         return services.append_collection_template(response, template_data)
@@ -173,8 +173,7 @@ class PluginInstanceDetail(generics.RetrieveUpdateDestroyAPIView):
         """
         if 'status' in self.request.data:
             instance = self.get_object()
-            if instance.status == 'started':
-                PluginAppManager.cancel_plugin_app_exec(instance)
+            instance.cancell()
         super(PluginInstanceDetail, self).perform_update(serializer)
 
     def destroy(self, request, *args, **kwargs):
