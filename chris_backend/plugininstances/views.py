@@ -1,7 +1,6 @@
 
 from rest_framework import generics
 from rest_framework import permissions
-from rest_framework import status
 from rest_framework.reverse import reverse
 from rest_framework.response import Response
 from rest_framework.serializers import ValidationError
@@ -18,7 +17,6 @@ from .serializers import PARAMETER_SERIALIZERS
 from .serializers import GenericParameterSerializer
 from .serializers import PluginInstanceSerializer, PluginInstanceFileSerializer
 from .permissions import IsRelatedFeedOwnerOrChris, IsOwnerOrChrisOrReadOnly
-from .services.manager import PluginAppManager
 
 
 class PluginInstanceList(generics.ListCreateAPIView):
@@ -71,11 +69,7 @@ class PluginInstanceList(generics.ListCreateAPIView):
             parameters_dict[param.name] = param_inst.value
 
         # run the plugin's app
-        PluginAppManager.run_plugin_app(plg_inst,
-                                        parameters_dict,
-                                        service             = 'pfcon',
-                                        inputDirOverride    = '/share/incoming',
-                                        outputDirOverride   = '/share/outgoing')
+        plg_inst.run(parameters_dict)
 
     def list(self, request, *args, **kwargs):
         """
@@ -149,7 +143,7 @@ class PluginInstanceDetail(generics.RetrieveUpdateDestroyAPIView):
         Overriden to check a plugin's instance status.
         """
         instance = self.get_object()
-        PluginAppManager.check_plugin_app_exec_status(instance)
+        instance.check_exec_status()
         response = super(PluginInstanceDetail, self).retrieve(request, *args, **kwargs)
         template_data = {'title': '', 'status': ''}
         return services.append_collection_template(response, template_data)
@@ -168,22 +162,24 @@ class PluginInstanceDetail(generics.RetrieveUpdateDestroyAPIView):
 
     def perform_update(self, serializer):
         """
-        Overriden to notify the satellite services that the user wants to cancel
-        the plugin instance execution.
+        Overriden to cancel this plugin instance and all its descendants' execution .
         """
         if 'status' in self.request.data:
             instance = self.get_object()
-            instance.cancell()
+            descendants = instance.get_descendant_instances()
+            for inst in descendants:
+                inst.cancel()
         super(PluginInstanceDetail, self).perform_update(serializer)
 
     def destroy(self, request, *args, **kwargs):
         """
-        Overriden to check that plugin instance's status is not 'started' before
-        attempting to delete it.
+        Overriden to cancel the plugin instance execution before deleting it. All the
+        descendant instances are also cancelled before they are deleted by the DB CASCADE.
         """
         instance = self.get_object()
-        if instance.status == 'started':
-            return Response(status=status.HTTP_304_NOT_MODIFIED)
+        descendants = instance.get_descendant_instances()
+        for inst in descendants:
+            inst.cancel()
         return super(PluginInstanceDetail, self).destroy(request, *args, **kwargs)
 
 

@@ -70,8 +70,8 @@ class PluginInstanceListViewTests(ViewTests):
             {"template": {"data": [{"name": "dir", "value": "./"}]}})
 
     def test_plugin_instance_create_success(self):
-        with mock.patch.object(views.PluginAppManager, 'run_plugin_app',
-                               return_value=None) as run_plugin_app_mock:
+        with mock.patch.object(views.PluginInstance, 'run',
+                               return_value=None) as run_mock:
             # add parameters to the plugin before the POST request
             plugin = Plugin.objects.get(name="pacspull")
             PluginParameter.objects.get_or_create(plugin=plugin, name='dir', type='string',
@@ -82,14 +82,9 @@ class PluginInstanceListViewTests(ViewTests):
                                         content_type=self.content_type)
             self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
-            # check that manager's run_plugin_app method was called with appropriate args
-            (plugin_inst, tf) = PluginInstance.objects.get_or_create(plugin=plugin)
+            # check that the run method was called with appropriate args
             parameters_dict = {'dir': './'}
-            run_plugin_app_mock.assert_called_with( plugin_inst,
-                                    parameters_dict,
-                                    service             = 'pfcon',
-                                    inputDirOverride    = '/share/incoming',
-                                    outputDirOverride   = '/share/outgoing')
+            run_mock.assert_called_with(parameters_dict)
 
     @tag('integration')
     def test_integration_plugin_instance_create_success(self):
@@ -169,20 +164,23 @@ class PluginInstanceDetailViewTests(ViewTests):
         user = User.objects.get(username=self.username)
         (self.pl_inst, tf) = PluginInstance.objects.get_or_create(plugin=plugin, owner=user,
                                                 compute_resource=plugin.compute_resource)
+        plugin = Plugin.objects.get(name="mri_convert")
+        PluginInstance.objects.get_or_create(plugin=plugin, owner=user,
+                                             previous=self.pl_inst,
+                                             compute_resource=plugin.compute_resource)
         self.read_update_delete_url = reverse("plugininstance-detail",
                                               kwargs={"pk": self.pl_inst.id})
 
     def test_plugin_instance_detail_success(self):
-        with mock.patch.object(views.PluginAppManager, 'check_plugin_app_exec_status',
-                               return_value=None) as check_plugin_app_exec_status_mock:
+        with mock.patch.object(views.PluginInstance, 'check_exec_status',
+                               return_value=None) as check_exec_status_mock:
             # make API request
             self.client.login(username=self.username, password=self.password)
             response = self.client.get(self.read_update_delete_url)
             self.assertContains(response, "pacspull")
 
-            # check that manager's check_plugin_app_exec_status method was called with
-            # appropriate args
-            check_plugin_app_exec_status_mock.assert_called_with(self.pl_inst)
+            # check that the check_exec_status method was called once
+            check_exec_status_mock.assert_called_once()
 
     @tag('integration', 'error-pman')
     def test_integration_plugin_instance_detail_success(self):
@@ -305,17 +303,10 @@ class PluginInstanceDetailViewTests(ViewTests):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_plugin_instance_delete_success(self):
-        self.pl_inst.status = 'finishedSuccessfully'
-        self.pl_inst.save()
         self.client.login(username=self.username, password=self.password)
         response = self.client.delete(self.read_update_delete_url)
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertEqual(PluginInstance.objects.count(), 0)
-
-    def test_plugin_instance_delete_failure_cannot_delete__instance_in_started_status(self):
-        self.client.login(username=self.username, password=self.password)
-        response = self.client.delete(self.read_update_delete_url)
-        self.assertEqual(response.status_code, status.HTTP_304_NOT_MODIFIED)
 
     def test_plugin_instance_delete_failure_unauthenticated(self):
         response = self.client.delete(self.read_update_delete_url)

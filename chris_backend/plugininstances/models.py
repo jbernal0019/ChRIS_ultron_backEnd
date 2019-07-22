@@ -192,11 +192,31 @@ class PluginInstance(models.Model):
 
     def cancel(self):
         """
-        Custom method to cancel the execution of this plugin instance.
+        Custom method to cancel the execution of the app corresponding to this plugin
+        instance.
         """
         if self.status == 'started':
             PluginAppManager.cancel_plugin_app_exec(self)
             self.status = 'cancelled'
+            self.save()
+
+    def run(self, parameters_dict):
+        """
+        Custom method to run the app corresponding to this plugin instance.
+        """
+        PluginAppManager.run_plugin_app(self,
+                                        parameters_dict,
+                                        service             = 'pfcon',
+                                        inputDirOverride    = '/share/incoming',
+                                        outputDirOverride   = '/share/outgoing')
+
+    def check_exec_status(self):
+        """
+        Custom method to check the execution status of the app corresponding to this
+        plugin instance.
+        """
+        if self.status == 'started':
+            PluginAppManager.check_plugin_app_exec_status(self)
 
 
 class PluginInstanceFilter(FilterSet):
