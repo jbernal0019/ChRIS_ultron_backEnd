@@ -5,11 +5,12 @@ Production Configurations
 """
 
 from .common import *  # noqa
-from environs import Env, EnvValidationError
-
 # Normally you should not import ANYTHING from Django directly
 # into your settings, but ImproperlyConfigured is an exception.
 from django.core.exceptions import ImproperlyConfigured
+
+from environs import Env, EnvValidationError
+import swiftclient
 
 
 # Environment variables-based secrets
@@ -58,6 +59,13 @@ SWIFT_USERNAME = get_secret('SWIFT_USERNAME')
 SWIFT_KEY = get_secret('SWIFT_KEY')
 SWIFT_CONTAINER_NAME = get_secret('SWIFT_CONTAINER_NAME')
 SWIFT_AUTO_CREATE_CONTAINER = True
+# initiate a swift service connection and create 'users' container
+conn = swiftclient.Connection(
+    user=SWIFT_USERNAME,
+    key=SWIFT_KEY,
+    authurl=SWIFT_AUTH_URL,
+)
+conn.put_container(SWIFT_CONTAINER_NAME)
 
 
 # PFCON SERVICE CONFIGURATION
@@ -66,6 +74,11 @@ PFCON = {
     'host': get_secret('PFCON_HOST'),
     'port': get_secret('PFCON_PORT')
 }
+
+
+# CHARM DEBUG CONTROL OUTPUT
+CHRIS_DEBUG = {'quiet': True, 'debugFile': '/dev/null', 'useDebug': False}
+CHRIS_DEBUG['quiet'] = get_secret('CHRIS_DEBUG_QUIET', env.bool)
 
 
 # LOGGING CONFIGURATION
