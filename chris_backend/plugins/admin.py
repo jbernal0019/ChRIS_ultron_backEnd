@@ -61,7 +61,7 @@ class ComputeResourceAdminForm(forms.ModelForm):
             raise forms.ValidationError(f"Could not register the compute resource, "
                                         f"detail: {str(e)}.")
 
-        compute_innetwork = data.get('compute_innetwork', False)
+        compute_innetwork = data.get('compute_innetwork', True)
 
         if compute_innetwork != d_resp['pfcon_innetwork']:
 
@@ -72,6 +72,18 @@ class ComputeResourceAdminForm(forms.ModelForm):
             raise forms.ValidationError("The remote compute resource's 'storage_env' "
                                         "must match this server's STORAGE_ENV setting "
                                         "when configured in-network.")
+
+        compute_requires_copy_job = data.get('compute_requires_copy_job', True)
+        compute_requires_upload_job = data.get('compute_requires_upload_job', False)
+
+        if compute_requires_copy_job != d_resp['requires_copy_job']:
+            raise serializers.ValidationError({
+                'compute_requires_copy_job': ["This field must match the remote compute "
+                                              "resource configuration."]})
+        if compute_requires_upload_job != d_resp['requires_upload_job']:
+            raise serializers.ValidationError({
+                'compute_requires_upload_job': ["This field must match the remote compute"
+                                                " resource configuration."]})
         return self.cleaned_data
 
 
@@ -88,6 +100,7 @@ class ComputeResourceAdmin(admin.ModelAdmin):
         """
         self.fields = ['name', 'compute_url', 'compute_auth_url', 'compute_user',
                        'compute_password', 'compute_auth_token', 'compute_innetwork',
+                       'compute_requires_copy_job', 'compute_requires_upload_job',
                        'description', 'max_job_exec_seconds']
         return admin.ModelAdmin.add_view(self, request, form_url, extra_context)
 
@@ -97,6 +110,7 @@ class ComputeResourceAdmin(admin.ModelAdmin):
         """
         self.fields = ['name', 'compute_url', 'compute_auth_url', 'compute_user',
                        'compute_password', 'compute_auth_token', 'compute_innetwork',
+                       'compute_requires_copy_job', 'compute_requires_upload_job',
                        'description', 'max_job_exec_seconds', 'creation_date',
                        'modification_date']
         return admin.ModelAdmin.change_view(self, request, object_id, form_url,
@@ -376,6 +390,8 @@ class ComputeResourceAdminList(generics.ListCreateAPIView):
         template_data = {'name': '', 'compute_url': '', 'compute_auth_url': '',
                          'compute_user': '', 'compute_password': '',
                          'compute_auth_token': '', 'compute_innetwork': '',
+                         'compute_requires_copy_job': '',
+                         'compute_requires_upload_job': '',
                          'description': '', 'max_job_exec_seconds': ''}
         return services.append_collection_template(response, template_data)
 

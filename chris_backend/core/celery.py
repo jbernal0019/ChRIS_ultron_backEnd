@@ -24,13 +24,15 @@ app.autodiscover_tasks()
 # the default 'celery' queue is exclusively used for the automated tests
 task_routes = {
     'plugininstances.tasks.sum': {'queue': 'main1'},
-    'plugininstances.tasks.run_plugin_instance': {'queue': 'main1'},
-    'plugininstances.tasks.check_plugin_instance_exec_status': {'queue': 'main2'},
-    'plugininstances.tasks.cancel_plugin_instance': {'queue': 'main2'},
+    'plugininstances.tasks.run_plugin_instance_job': {'queue': 'main1'},
+    'plugininstances.tasks.check_plugin_instance_job_exec_status': {'queue': 'main2'},
+    'plugininstances.tasks.cancel_plugin_instance_job': {'queue': 'main2'},
     'plugininstances.tasks.delete_plugin_instance_job_from_remote': {'queue': 'main2'},
     'plugininstances.tasks.schedule_waiting_plugin_instances':
         {'queue': 'periodic'},
     'plugininstances.tasks.check_started_plugin_instances_exec_status':
+        {'queue': 'periodic'},
+    'plugininstances.tasks.check_created_plugin_instances_copy_exec_status':
         {'queue': 'periodic'},
     'plugininstances.tasks.cancel_waiting_plugin_instances':
         {'queue': 'periodic'},
@@ -64,6 +66,10 @@ app.conf.beat_schedule = {
     },
     'check-started-plugin-instances-exec-status-every-30-seconds': {
         'task': 'plugininstances.tasks.check_started_plugin_instances_exec_status',
+        'schedule': POLL_INTERVAL,
+    },
+    'check-created-plugin-instances-copy-exec-status-every-30-seconds': {
+        'task': 'plugininstances.tasks.check_created_plugin_instances_copy_exec_status',
         'schedule': POLL_INTERVAL,
     },
     'cancel-waiting-plugin-instances-every-30-seconds': {

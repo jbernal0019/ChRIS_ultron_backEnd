@@ -16,7 +16,7 @@ from .serializers import (PARAMETER_SERIALIZERS, GenericParameterSerializer,
                           PluginInstanceSplitSerializer, PluginInstanceSerializer)
 from .permissions import (IsOwnerOrChrisOrHasFeedPermissionReadOnlyOrPublicFeedReadOnly,
                           IsNotDeleteFSPluginInstance)
-from .tasks import run_plugin_instance, cancel_plugin_instance, delete_plugin_instance
+from .tasks import cancel_plugin_instance_job, delete_plugin_instance
 from .utils import run_if_ready
 
 
@@ -219,7 +219,7 @@ class PluginInstanceDetail(generics.RetrieveUpdateDestroyAPIView):
                 descendants = instance.get_descendant_instances()
 
                 if instance.status == 'started':
-                    cancel_plugin_instance.delay(instance.id)  # call async task
+                    cancel_plugin_instance_job.delay(instance.id)  # call async task
 
                 PluginInstance.objects.filter(
                     pk__in=[inst.id for inst in descendants]
@@ -238,7 +238,7 @@ class PluginInstanceDetail(generics.RetrieveUpdateDestroyAPIView):
         descendants = instance.get_descendant_instances()
 
         if instance.status == 'started':
-            cancel_plugin_instance(instance.id)
+            cancel_plugin_instance_job(instance.id)
 
         plg_inst_ids = []
         for plg_inst in descendants:

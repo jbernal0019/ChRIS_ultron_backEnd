@@ -23,7 +23,7 @@ from userfiles.models import UserFile
 from plugins.models import PluginMeta, Plugin, PluginParameter, ComputeResource
 from plugininstances.models import PluginInstance
 from plugininstances.models import PathParameter, FloatParameter
-from plugininstances.services.manager import PluginInstanceManager
+from plugininstances.services.pluginjobs import PluginInstanceAppJob
 from plugininstances import views
 
 
@@ -380,13 +380,13 @@ class PluginInstanceListViewTests(TasksViewTests):
         # In the following we keep checking the status until the job ends with
         # 'finishedSuccessfully'. The code runs in a lazy loop poll with a
         # max number of attempts at 10 second intervals.
-        plg_inst_manager = PluginInstanceManager(pl_inst)
+        plg_inst_app_job = PluginInstanceAppJob(pl_inst)
         maxLoopTries = 10
         currentLoop = 1
         b_checkAgain = True
         time.sleep(10)
         while b_checkAgain:
-            str_responseStatus = plg_inst_manager.check_plugin_instance_app_exec_status()
+            str_responseStatus = plg_inst_app_job.check_exec_status()
             if str_responseStatus == 'finishedSuccessfully':
                 b_checkAgain = False
             elif currentLoop < maxLoopTries:
@@ -471,13 +471,13 @@ class PluginInstanceListViewTests(TasksViewTests):
         # In the following we keep checking the status until the job ends with
         # 'finishedSuccessfully'. The code runs in a lazy loop poll with a
         # max number of attempts at 10 second intervals.
-        plg_inst_manager = PluginInstanceManager(pl_inst)
+        plg_inst_app_job = PluginInstanceAppJob(pl_inst)
         maxLoopTries = 10
         currentLoop = 1
         b_checkAgain = True
         time.sleep(10)
         while b_checkAgain:
-            str_responseStatus = plg_inst_manager.check_plugin_instance_app_exec_status()
+            str_responseStatus = plg_inst_app_job.check_exec_status()
             if str_responseStatus == 'finishedSuccessfully':
                 b_checkAgain = False
             elif currentLoop < maxLoopTries:
@@ -599,13 +599,13 @@ class PluginInstanceListViewTests(TasksViewTests):
         # In the following we keep checking the status until the job ends with
         # 'finishedSuccessfully'. The code runs in a lazy loop poll with a
         # max number of attempts at 10 second intervals.
-        plg_inst_manager = PluginInstanceManager(pl_inst)
+        plg_inst_app_job = PluginInstanceAppJob(pl_inst)
         maxLoopTries = 10
         currentLoop = 1
         b_checkAgain = True
         time.sleep(10)
         while b_checkAgain:
-            str_responseStatus = plg_inst_manager.check_plugin_instance_app_exec_status()
+            str_responseStatus = plg_inst_app_job.check_exec_status()
             if str_responseStatus == 'finishedSuccessfully':
                 b_checkAgain = False
             elif currentLoop < maxLoopTries:
@@ -736,8 +736,8 @@ class PluginInstanceDetailViewTests(TasksViewTests):
                                          kwargs={"pk": pl_inst.id})
 
         # run the plugin instance
-        plg_inst_manager = PluginInstanceManager(pl_inst)
-        plg_inst_manager.run_plugin_instance_app()
+        plg_inst_app_job = PluginInstanceAppJob(pl_inst)
+        plg_inst_app_job.run()
 
         # In the following we keep checking the status until the job ends with
         # 'finishedSuccessfully'. The code runs in a lazy loop poll with a
@@ -748,7 +748,7 @@ class PluginInstanceDetailViewTests(TasksViewTests):
         b_checkAgain = True
         time.sleep(10)
         while b_checkAgain:
-            plg_inst_manager.check_plugin_instance_app_exec_status()
+            plg_inst_app_job.check_exec_status()
             response = self.client.get(read_update_delete_url)
             str_responseStatus = response.data['status']
             if str_responseStatus == 'finishedSuccessfully':

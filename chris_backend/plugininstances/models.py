@@ -4,7 +4,6 @@ import logging
 from django.db import models
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
-from django.conf import settings
 from django.utils import timezone
 
 import django_filters
@@ -21,7 +20,7 @@ from workflows.models import Workflow
 logger = logging.getLogger(__name__)
 
 
-STATUS_CHOICES = [("created", "Default initial"),
+STATUS_CHOICES = [("created", "Default initial"),  # means copying when copy jobs required 
                   ("waiting", "Waiting to be scheduled"),
                   ("scheduled", "Scheduled on worker"),
                   ("started", "Started on compute env"),
@@ -35,13 +34,30 @@ ACTIVE_STATUSES = ['created', 'waiting', 'scheduled', 'started', 'registeringFil
 INACTIVE_STATUSES = ['finishedSuccessfully', 'finishedWithError', 'cancelled']
 
 
+def get_default_job_status_summary() -> dict:
+    """
+    Get a default job status summary JSON.
+    """
+    return {
+        'pushPath': {'status': False},
+        'pullPath': {'status': False},
+        'compute': {
+            'submit': {'status': False},
+            'return': {'status': False,
+                       'job_status': '',
+                       'job_logs': ''
+                }
+            },
+        }
+
+
 class PluginInstance(AsyncDeletableModel):
     title = models.CharField(max_length=100, blank=True)
     start_date = models.DateTimeField(auto_now_add=True)
     end_date = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='created',
                               db_index=True)
-    summary = models.CharField(max_length=4000, blank=True)
+    summary = models.JSONField(blank=True, default=get_default_job_status_summary)
     raw = models.TextField(blank=True)
     size = models.BigIntegerField(default=0)
     error_code = models.CharField(max_length=7, blank=True)

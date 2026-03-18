@@ -10,7 +10,8 @@ from celery import shared_task
 from celery.signals import task_failure
 
 from .models import PluginInstance
-from .services.manager import PluginInstanceManager
+from .services.pluginjobs import PluginInstanceAppJob
+from .services.copyjobs import PluginInstanceCopyJob
 
 
 logger = logging.getLogger(__name__)
@@ -60,38 +61,40 @@ def delete_plugin_instance(self, plugin_inst_id):
         raise
 
 @shared_task
-def run_plugin_instance(plg_inst_id):
+def run_plugin_instance_job(plg_inst_id, job_class_name):
     """
-    Run the app corresponding to this plugin instance.
+    Run a job for this plugin instance.
     """
     #from celery.contrib import rdb;rdb.set_trace()
     try:
         plugin_inst = PluginInstance.objects.get(pk=plg_inst_id)
     except PluginInstance.DoesNotExist:
         logger.error(f"Plugin instance with id {plg_inst_id} not found when running "
-                     f"run_plugin_instance task.")
+                     f"run_plugin_instance_job task.")
     else:
-        plg_inst_manager = PluginInstanceManager(plugin_inst)
-        plg_inst_manager.run_plugin_instance_app()
+        job_class = globals()[job_class_name]
+        plg_inst_job = job_class(plugin_inst)
+        plg_inst_job.run()
 
 
 @shared_task
-def check_plugin_instance_exec_status(plg_inst_id):
+def check_plugin_instance_job_exec_status(plg_inst_id, job_class_name):
     """
-    Check the execution status of the app corresponding to this plugin instance.
+    Check the execution status of a job for this plugin instance.
     """
     try:
         plugin_inst = PluginInstance.objects.get(pk=plg_inst_id)
     except PluginInstance.DoesNotExist:
         logger.error(f"Plugin instance with id {plg_inst_id} not found when running "
-                     f"check_plugin_instance_exec_status task.")
+                     f"check_plugin_instance_job_exec_status task.")
     else:
-        plg_inst_manager = PluginInstanceManager(plugin_inst)
-        plg_inst_manager.check_plugin_instance_app_exec_status()
+        job_class = globals()[job_class_name]
+        plg_inst_job = job_class(plugin_inst)
+        plg_inst_job.check_exec_status()
 
 
 @shared_task
-def cancel_plugin_instance(plg_inst_id):
+def cancel_plugin_instance_job(plg_inst_id, job_class_name):
     """
     Cancel the execution of the app corresponding to this plugin instance.
     """
@@ -101,12 +104,13 @@ def cancel_plugin_instance(plg_inst_id):
         logger.error(f"Plugin instance with id {plg_inst_id} not found when running "
                      f"cancel_plugin_instance task.")
     else:
-        plg_inst_manager = PluginInstanceManager(plugin_inst)
-        plg_inst_manager.cancel_plugin_instance_app_exec()
+        job_class = globals()[job_class_name]
+        plg_inst_job = job_class(plugin_inst)
+        plg_inst_job.cancel_exec()
 
 
 @shared_task
-def delete_plugin_instance_job_from_remote(plg_inst_id):
+def delete_plugin_instance_job_from_remote(plg_inst_id, job_class_name):
     """
     Delete a plugin instance's app job from the remote compute.
     """
@@ -116,8 +120,9 @@ def delete_plugin_instance_job_from_remote(plg_inst_id):
         logger.error(f"Plugin instance with id {plg_inst_id} not found when running "
                      f"delete_plugin_instance_job_from_remote task.")
     else:
-        plg_inst_manager = PluginInstanceManager(plugin_inst)
-        plg_inst_manager.delete_plugin_instance_job_from_remote()
+        job_class = globals()[job_class_name]
+        plg_inst_job = job_class(plugin_inst)
+        plg_inst_job.delete()
         plugin_inst.save()  # remove error code from DB if successful delete
 
 
@@ -125,7 +130,7 @@ def delete_plugin_instance_job_from_remote(plg_inst_id):
 @skip_if_running
 def schedule_waiting_plugin_instances(self):  # task is passed info about itself
     """
-    Schedule the apps corresponding to all plugin instances in 'waiting' DB status
+    Schedule the jobs corresponding to all plugin instances in 'waiting' DB status
     and whose previous plugin instance is in 'finishedSuccessfully' DB status.
     However, if the plugin instance is of type 'ts' all the ancestor plugin instances
     with id in the list given by the plugininstances parameter must also be in
@@ -145,31 +150,43 @@ def schedule_waiting_plugin_instances(self):  # task is passed info about itself
 
             if all(finished):
                 plg_inst.set_status('scheduled')
-                run_plugin_instance.delay(plg_inst.id)  # call async task
+                run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceAppJob')  # call async task
         else:
             plg_inst.set_status('scheduled')
-            run_plugin_instance.delay(plg_inst.id)  # call async task
+            run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceAppJob')  # call async task
 
     for plg_inst in all_instances.difference(ts_instances):
         plg_inst.set_status('scheduled')
-        run_plugin_instance.delay(plg_inst.id)  # call async task
+        run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceAppJob')  # call async task
 
 
 @shared_task
 def check_started_plugin_instances_exec_status():
     """
-    Check the execution status of the apps corresponding to all the plugin instances
+    Check the execution status of the app jobs corresponding to all the plugin instances
     with 'started' DB status.
     """
     instances = PluginInstance.objects.filter(status='started')
     for plg_inst in instances:
-        check_plugin_instance_exec_status.delay(plg_inst.id)  # call async task
+        check_plugin_instance_job_exec_status.delay(plg_inst.id, 'PluginInstanceAppJob')  # call async task
+
+
+@shared_task
+def check_created_plugin_instances_copy_exec_status():
+    """
+    Check the execution status of the copy jobs corresponding to all the plugin instances
+    with 'created' DB status when remote compute requires copy jobs.
+    """
+    instances = PluginInstance.objects.filter(status='created')
+    for plg_inst in instances:
+        if plg_inst.compute_resource.compute_requires_copy_job:
+            check_plugin_instance_job_exec_status.delay(plg_inst.id, 'PluginInstanceCopyJob')  # call async task
 
 
 @shared_task
 def cancel_waiting_plugin_instances():
     """
-    Cancel the apps corresponding to all plugin instances in 'waiting' DB
+    Cancel the jobs corresponding to all plugin instances in 'waiting' DB
     status when their previous plugin instance is in either 'finishedWithError' or
     'cancelled' DB status. Plugin instances of type 'ts' are cancelled if at least one
     of their ancestors is in any of those DB statuses.
@@ -198,6 +215,7 @@ def cancel_waiting_plugin_instances():
                     break
 
     PluginInstance.objects.filter(pk__in=plg_inst_ids).update(status='cancelled')
+
 
 
 @shared_task
@@ -229,7 +247,7 @@ def cancel_plugin_instances_stuck_in_lock():
     for plg_inst in instances:
         plg_inst.error_code = 'CODE18'
         plg_inst.save(update_fields=['error_code'])
-        cancel_plugin_instance.delay(plg_inst.id)  # call async task
+        cancel_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceAppJob')  # call async task
 
 
 @shared_task
@@ -279,7 +297,7 @@ def cancel_plugin_inst_on_task_failure(sender=None, task_id=None, exception=None
 
         logger.info(f"Sending cancelling task for plugin instance with id {plg_inst_id} "
                     f"after crash in task {sender.name}")
-        cancel_plugin_instance.delay(plg_inst_id)  # call async task
+        cancel_plugin_instance_job.delay(plg_inst_id, 'PluginInstanceAppJob')  # call async task
 
 
 @shared_task  # toy task for testing celery stuff
