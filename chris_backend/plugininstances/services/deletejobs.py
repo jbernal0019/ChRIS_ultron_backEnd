@@ -5,7 +5,6 @@ environment (ChRIS / pfcon interface) as well as deleting them when finished.
 """
 
 import logging
-import io
 import json
 
 from pfconclient.client import JobType
@@ -31,7 +30,8 @@ class PluginInstanceDeleteJob(PluginInstanceJob):
         """
         Run the plugin instance data delete job via a call to a remote pfcon service.
         """
-        super().run()
+        if self.c_plugin_inst.status == 'cancelled':
+            return
 
         job_id = self.str_job_id        
         pfcon_url = self.pfcon_client.url
@@ -39,7 +39,7 @@ class PluginInstanceDeleteJob(PluginInstanceJob):
         logger.info(f'Submitting data delete job {job_id} to pfcon url '
                     f'-->{pfcon_url}<--')
         try:
-            d_resp = self._submit(job_id, {})
+            d_resp = self._submit(JobType.DELETE, job_id, {})
         except PfconRequestException as e:
             logger.error(f'[CODE01,{job_id}]: Error submitting data delete job to pfcon '
                          f'url -->{pfcon_url}<--, detail: {str(e)}')
@@ -60,13 +60,6 @@ class PluginInstanceDeleteJob(PluginInstanceJob):
             self.c_plugin_inst.start_date = now
             self.c_plugin_inst.end_date = now
             self.c_plugin_inst.save()
-
-    def _submit(self, job_id: str, job_descriptors: dict, dfile: io.BytesIO | None = None,
-                 timeout: int = 30) -> dict:
-        """
-        Submit plugin instance data delete job to a remote pfcon service.
-        """
-        return super()._submit(JobType.DELETE, job_id, job_descriptors, dfile, timeout)
 
     def check_exec_status(self):
         """
@@ -90,7 +83,7 @@ class PluginInstanceDeleteJob(PluginInstanceJob):
             logger.info(f'Sending job status request to pfcon url -->{pfcon_url}<-- for '
                         f'delete job {job_id}')
             try:
-                d_resp = self._get_status(job_id)
+                d_resp = self._get_status(JobType.DELETE, job_id)
             except PfconRequestException as e:
                 logger.error(f'[CODE02,{job_id}]: Error getting delete job status at '
                              f'pfcon url -->{pfcon_url}<--, detail: {str(e)}')
@@ -115,18 +108,12 @@ class PluginInstanceDeleteJob(PluginInstanceJob):
                 status='started').update(summary=summary, raw=raw)
 
             if status == 'finishedSuccessfully':
-                self._handle_finished_successfully_status()
+                self.handle_finished_successfully_status()
             elif status == 'finishedWithError':
-                self._handle_finished_with_error_status()
+                self.handle_finished_with_error_status()
             elif status == 'undefined':
-                self._handle_undefined_status()
+                self.handle_undefined_status()
         return self.c_plugin_inst.status
-
-    def _get_status(self, job_id: str, timeout: int = 30) -> dict:
-        """
-        Get plugin instance data delete job status from a remote pfcon service.
-        """
-        return super()._get_status(JobType.DELETE, job_id, timeout)
 
     def cancel_exec(self):
         """
@@ -147,7 +134,7 @@ class PluginInstanceDeleteJob(PluginInstanceJob):
         logger.info(f'Deleting data delete job {job_id} from pfcon at url '
                     f'-->{pfcon_url}<--')
         try:
-            self._delete(job_id)
+            self._delete(JobType.DELETE, job_id)
         except PfconRequestException as e:
             logger.error(f'[CODE12,{job_id}]: Error deleting data delete job from '
                              f'pfcon at url -->{pfcon_url}<--, detail: {str(e)}')
@@ -157,34 +144,25 @@ class PluginInstanceDeleteJob(PluginInstanceJob):
                         f'url -->{pfcon_url}<--')
             if self.c_plugin_inst.error_code == 'CODE12':
                 self.c_plugin_inst.error_code = ''
-
-    def _delete(self, job_id: str, timeout: int = 30):
-        """
-        Delete a plugin instance data delete job from a remote pfcon service.
-        """
-        super()._delete(JobType.DELETE, job_id, timeout)
         
-    def _handle_finished_successfully_status(self):
+    def handle_finished_successfully_status(self):
         """
-        Internal method to handle the 'finishedSuccessfully' status returned by the
-        remote compute.
+        Handle the 'finishedSuccessfully' status returned by the remote compute.
         """
         job_id = self.str_job_id
         logger.info(f'Successfully finished plugin instance delete job {job_id}')
         # TODO: schedule delete call for tht delete job and the copy, plugin and upload jobs
 
-    def _handle_finished_with_error_status(self):
+    def handle_finished_with_error_status(self):
         """
-        Internal method to handle the 'finishedWithError' status returned by the
-        remote compute.
+        Handle the 'finishedWithError' status returned by the remote compute.
         """
         job_id = self.str_job_id
         # TODO: retry delete job
 
-    def _handle_undefined_status(self):
+    def handle_undefined_status(self):
         """
-        Internal method to handle the 'undefined' status returned by the
-        remote compute.
+        Handle the 'undefined' status returned by the remote compute.
         """
         job_id = self.str_job_id
         # TODO: retry delete job

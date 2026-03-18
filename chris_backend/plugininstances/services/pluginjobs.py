@@ -46,7 +46,8 @@ class PluginInstanceAppJob(PluginInstanceJob):
         """
         Run the plugin instance app job via a call to a remote pfcon service.
         """
-        super().run()
+        if self.c_plugin_inst.status == 'cancelled':
+            return
 
         job_id = self.str_job_id
         plugin = self.c_plugin_inst.plugin
@@ -115,8 +116,8 @@ class PluginInstanceAppJob(PluginInstanceJob):
         logger.info(f'Submitting plugin job {job_id} to pfcon url -->{pfcon_url}<--, '
                     f'description: {json.dumps(job_descriptors, indent=4)}')
         try:
-            d_resp = self._submit(job_id, job_descriptors, job_zip_file_content,
-                                      job_timeout)
+            d_resp = self._submit(JobType.PLUGIN, job_id, job_descriptors, 
+                                  job_zip_file_content, job_timeout)
         except PfconRequestException as e:
             logger.error(f'[CODE01,{job_id}]: Error submitting plugin job to pfcon url '
                          f'-->{pfcon_url}<--, detail: {str(e)}')
@@ -182,13 +183,6 @@ class PluginInstanceAppJob(PluginInstanceJob):
             env.append(f'CHRIS_WORKFLOW_PLG_INSTANCES={workflow_instances_info[:-1]}')
         return env
 
-    def _submit(self, job_id: str, job_descriptors: dict, dfile: io.BytesIO | None = None,
-                 timeout: int = 30) -> dict:
-        """
-        Submit job to a remote pfcon service.
-        """
-        return super()._submit(JobType.PLUGIN, job_id, job_descriptors, dfile, timeout)
-
     def check_exec_status(self):
         """
         Check a plugin instance app job's execution status. If the job has timed out then
@@ -211,7 +205,7 @@ class PluginInstanceAppJob(PluginInstanceJob):
             logger.info(f'Sending job status request to pfcon url -->{pfcon_url}<-- for '
                         f'plugin job {job_id}')
             try:
-                d_resp = self._get_status(job_id)
+                d_resp = self._get_status(JobType.PLUGIN, job_id)
             except PfconRequestException as e:
                 logger.error(f'[CODE02,{job_id}]: Error getting plugin job status at '
                              f'pfcon url -->{pfcon_url}<--, detail: {str(e)}')
@@ -236,18 +230,12 @@ class PluginInstanceAppJob(PluginInstanceJob):
                 status='started').update(summary=summary, raw=raw)
 
             if status == 'finishedSuccessfully':
-                self._handle_finished_successfully_status()
+                self.handle_finished_successfully_status()
             elif status == 'finishedWithError':
-                self._handle_finished_with_error_status()
+                self.handle_finished_with_error_status()
             elif status == 'undefined':
-                self._handle_undefined_status()
+                self.handle_undefined_status()
         return self.c_plugin_inst.status
-
-    def _get_status(self, job_id: str, timeout: int = 30) -> dict:
-        """
-        Get job status from a remote pfcon service.
-        """
-        return super()._get_status(JobType.PLUGIN, job_id, timeout)
     
     def cancel_exec(self):
         """
@@ -268,7 +256,7 @@ class PluginInstanceAppJob(PluginInstanceJob):
         logger.info(f'Deleting job {job_id} from pfcon at url '
                     f'-->{pfcon_url}<--')
         try:
-            self._delete(job_id)
+            self._delete(JobType.PLUGIN, job_id)
         except PfconRequestException as e:
             logger.error(f'[CODE12,{job_id}]: Error deleting job from '
                              f'pfcon at url -->{pfcon_url}<--, detail: {str(e)}')
@@ -278,12 +266,6 @@ class PluginInstanceAppJob(PluginInstanceJob):
                         f'url -->{pfcon_url}<--')
             if self.c_plugin_inst.error_code == 'CODE12':
                 self.c_plugin_inst.error_code = ''
-
-    def _delete(self, job_id: str, timeout: int = 30):
-        """
-        Delete a job from a remote pfcon service.
-        """
-        super()._delete(JobType.PLUGIN, job_id, timeout)
         
     def get_previous_output_path(self):
         """
@@ -760,10 +742,9 @@ class PluginInstanceAppJob(PluginInstanceJob):
                         raise
                     self.plugin_inst_output_files.add(obj_output_path)
 
-    def _handle_finished_successfully_status(self):
+    def handle_finished_successfully_status(self):
         """
-        Internal method to handle the 'finishedSuccessfully' status returned by the
-        remote compute.
+        Handle the 'finishedSuccessfully' status returned by the remote compute.
         """
         plg_inst_lock = PluginInstanceLock(plugin_inst=self.c_plugin_inst)
         try:
@@ -862,10 +843,9 @@ class PluginInstanceAppJob(PluginInstanceJob):
             zip_content = self.pfcon_client.get_plugin_job_zip_data(job_id, timeout)
         return zip_content
 
-    def _handle_finished_with_error_status(self):
+    def handle_finished_with_error_status(self):
         """
-        Internal method to handle the 'finishedWithError' status returned by the
-        remote compute.
+        Handle the 'finishedWithError' status returned by the remote compute.
         """
         plg_inst_lock = PluginInstanceLock(plugin_inst=self.c_plugin_inst)
         try:
@@ -918,10 +898,9 @@ class PluginInstanceAppJob(PluginInstanceJob):
             self.delete()
             self.save_plugin_instance_final_status()
 
-    def _handle_undefined_status(self):
+    def handle_undefined_status(self):
         """
-        Internal method to handle the 'undefined' status returned by the
-        remote compute.
+        Handle the 'undefined' status returned by the remote compute.
         """
         job_id = self.str_job_id
         logger.error(f'[CODE10,{job_id}]: Got undefined status from remote')

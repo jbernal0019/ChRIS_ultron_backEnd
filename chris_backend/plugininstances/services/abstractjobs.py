@@ -56,8 +56,7 @@ class PluginInstanceJob(abc.ABC):
         """
         Submit the job to the remote compute service for execution.
         """
-        if self.c_plugin_inst.status == 'cancelled':
-            return
+        ...
 
     @abc.abstractmethod
     def check_exec_status(self):
@@ -82,6 +81,26 @@ class PluginInstanceJob(abc.ABC):
         """
         ...
 
+    @abc.abstractmethod
+    def handle_finished_successfully_status(self):
+        """
+        Handle the 'finishedSuccessfully' status returned by the remote compute.
+        """
+        ...
+
+    @abc.abstractmethod
+    def handle_finished_with_error_status(self):
+        """
+        Handle the 'finishedWithError' status returned by the remote compute.
+        """
+        ...
+
+    @abc.abstractmethod
+    def handle_undefined_status(self):
+        """
+        Handle the 'undefined' status returned by the remote compute.
+        """
+        ...
 
     def get_job_status_summary(self, d_resp: dict | None = None, 
                                push_path_status: bool | None = None, 

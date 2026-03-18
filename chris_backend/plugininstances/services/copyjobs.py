@@ -6,7 +6,6 @@ environment (ChRIS / pfcon interface) as well as deleting them when finished.
 
 import logging
 import os
-import io
 import time
 import json
 
@@ -40,7 +39,8 @@ class PluginInstanceCopyJob(PluginInstanceJob):
         """
         Run the plugin instance copy job via a call to a remote pfcon service.
         """
-        super().run()
+        if self.c_plugin_inst.status == 'cancelled':
+            return
 
         job_id = self.str_job_id        
         plugin = self.c_plugin_inst.plugin
@@ -81,7 +81,7 @@ class PluginInstanceCopyJob(PluginInstanceJob):
         logger.info(f'Submitting copy job {job_id} to pfcon url -->{pfcon_url}<--, '
                     f'description: {json.dumps(job_descriptors, indent=4)}')
         try:
-            d_resp = self._submit(job_id, job_descriptors)
+            d_resp = self._submit(JobType.COPY, job_id, job_descriptors)
         except PfconRequestException as e:
             logger.error(f'[CODE01,{job_id}]: Error submitting copy job to pfcon url '
                          f'-->{pfcon_url}<--, detail: {str(e)}')
@@ -102,13 +102,6 @@ class PluginInstanceCopyJob(PluginInstanceJob):
             self.c_plugin_inst.start_date = now
             self.c_plugin_inst.end_date = now
             self.c_plugin_inst.save()
-
-    def _submit(self, job_id: str, job_descriptors: dict, dfile: io.BytesIO | None = None,
-                 timeout: int = 30) -> dict:
-        """
-        Submit plugin instance copy job to a remote pfcon service.
-        """
-        return super()._submit(JobType.COPY, job_id, job_descriptors, dfile, timeout)
 
     def check_exec_status(self):
         """
@@ -135,7 +128,7 @@ class PluginInstanceCopyJob(PluginInstanceJob):
             logger.info(f'Sending job status request to pfcon url -->{pfcon_url}<-- for '
                         f'copy job {job_id}')
             try:
-                d_resp = self._get_status(job_id)
+                d_resp = self._get_status(JobType.COPY, job_id)
             except PfconRequestException as e:
                 logger.error(f'[CODE02,{job_id}]: Error getting copy job status at pfcon '
                              f'url -->{pfcon_url}<--, detail: {str(e)}')
@@ -160,18 +153,12 @@ class PluginInstanceCopyJob(PluginInstanceJob):
                 status='started').update(summary=summary, raw=raw)
 
             if status == 'finishedSuccessfully':
-                self._handle_finished_successfully_status()
+                self.handle_finished_successfully_status()
             elif status == 'finishedWithError':
-                self._handle_finished_with_error_status()
+                self.handle_finished_with_error_status()
             elif status == 'undefined':
-                self._handle_undefined_status()
+                self.handle_undefined_status()
         return self.c_plugin_inst.status
-
-    def _get_status(self, job_id: str, timeout: int = 30) -> dict:
-        """
-        Get plugin instance copy job status from a remote pfcon service.
-        """
-        return super()._get_status(JobType.COPY, job_id, timeout)
 
     def cancel_exec(self):
         """
@@ -193,7 +180,7 @@ class PluginInstanceCopyJob(PluginInstanceJob):
         logger.info(f'Deleting copy job {job_id} from pfcon at url '
                     f'-->{pfcon_url}<--')
         try:
-            self._delete(job_id)
+            self._delete(JobType.COPY, job_id)
         except PfconRequestException as e:
             logger.error(f'[CODE12,{job_id}]: Error deleting copy job from '
                              f'pfcon at url -->{pfcon_url}<--, detail: {str(e)}')
@@ -203,12 +190,6 @@ class PluginInstanceCopyJob(PluginInstanceJob):
                         f'url -->{pfcon_url}<--')
             if self.c_plugin_inst.error_code == 'CODE12':
                 self.c_plugin_inst.error_code = ''
-
-    def _delete(self, job_id: str, timeout: int = 30):
-        """
-        Delete a plugin instance copy job from a remote pfcon service.
-        """
-        super()._delete(JobType.COPY, job_id, timeout)
         
     def get_previous_output_path(self):
         """
@@ -257,10 +238,9 @@ class PluginInstanceCopyJob(PluginInstanceJob):
                 path_parameters_dict[param.flag] = value
         return unextpath_parameters_dict, path_parameters_dict
 
-    def _handle_finished_successfully_status(self):
+    def handle_finished_successfully_status(self):
         """
-        Internal method to handle the 'finishedSuccessfully' status returned by the
-        remote compute.
+        Handle the 'finishedSuccessfully' status returned by the remote compute.
         """
         job_id = self.str_job_id
         logger.info(f'Successfully finished plugin instance copy job {job_id}')
@@ -271,10 +251,9 @@ class PluginInstanceCopyJob(PluginInstanceJob):
         plg_inst_app_job = PluginInstanceAppJob(self.c_plugin_inst)
         plg_inst_app_job.run()
 
-    def _handle_finished_with_error_status(self):
+    def handle_finished_with_error_status(self):
         """
-        Internal method to handle the 'finishedWithError' status returned by the
-        remote compute.
+        Handle the 'finishedWithError' status returned by the remote compute.
         """
         job_id = self.str_job_id
         self.c_plugin_inst.status = 'cancelled'
@@ -285,10 +264,9 @@ class PluginInstanceCopyJob(PluginInstanceJob):
         # TODO: schedule delete job in case there is data in the remote compute 
         # to be deleted and then that job should schedule delete for this copy job
 
-    def _handle_undefined_status(self):
+    def handle_undefined_status(self):
         """
-        Internal method to handle the 'undefined' status returned by the
-        remote compute.
+        Handle the 'undefined' status returned by the remote compute.
         """
         job_id = self.str_job_id
         self.c_plugin_inst.status = 'cancelled'
