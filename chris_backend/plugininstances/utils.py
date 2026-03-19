@@ -22,8 +22,7 @@ def run_if_ready(plg_inst, previous):
         for parent in parents:
             if parent.status in ('created', 'waiting', 'scheduled',
                                  'registeringFiles', 'started'):
-                if not plg_inst.compute_resource.compute_requires_copy_job:
-                    plg_inst.set_status('waiting')
+                plg_inst.set_status('waiting')
                 all_parents_finished = False
                 break
             if parent.status in ('finishedWithError', 'cancelled'):
@@ -33,22 +32,21 @@ def run_if_ready(plg_inst, previous):
 
         if all_parents_finished:
             if plg_inst.compute_resource.compute_requires_copy_job:
-                run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceCopyJob')  # call async task
+                run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceCopyJob')
             else:
                 plg_inst.set_status('scheduled')
-                run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceAppJob')  # call async task
+                run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceAppJob')
 
     elif previous is None or previous.status == 'finishedSuccessfully':
         if plg_inst.compute_resource.compute_requires_copy_job:
-            run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceCopyJob')  # call async task
+            run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceCopyJob')
         else:
-            plg_inst.set_status('scheduled') # changes to 'scheduled' right away
-            run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceAppJob')  # call async task
+            plg_inst.set_status('scheduled')
+            run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceAppJob')
 
     elif previous.status in ('created', 'waiting', 'scheduled',
                              'registeringFiles', 'started'):
-        if not plg_inst.compute_resource.compute_requires_copy_job:
-                    plg_inst.set_status('waiting')
+        plg_inst.set_status('waiting')
 
     elif previous.status in ('finishedWithError', 'cancelled'):
         plg_inst.set_status('cancelled')

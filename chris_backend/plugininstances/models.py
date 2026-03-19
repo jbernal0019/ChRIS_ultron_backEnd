@@ -20,7 +20,7 @@ from workflows.models import Workflow
 logger = logging.getLogger(__name__)
 
 
-STATUS_CHOICES = [("created", "Default initial"),  # means copying when copy jobs required 
+STATUS_CHOICES = [("created", "Default initial"),
                   ("waiting", "Waiting to be scheduled"),
                   ("scheduled", "Scheduled on worker"),
                   ("started", "Started on compute env"),
@@ -32,6 +32,14 @@ STATUS_CHOICES = [("created", "Default initial"),  # means copying when copy job
 ACTIVE_STATUSES = ['created', 'waiting', 'scheduled', 'started', 'registeringFiles']
 
 INACTIVE_STATUSES = ['finishedSuccessfully', 'finishedWithError', 'cancelled']
+
+REMOTE_CLEANUP_STATUS_CHOICES = [
+    ('notStarted', 'Not started'),
+    ('deletingData', 'Deleting remote data'),
+    ('deletingContainers', 'Deleting remote containers'),
+    ('complete', 'Cleanup complete'),
+    ('failed', 'Cleanup failed'),
+]
 
 
 def get_default_job_status_summary() -> dict:
@@ -52,6 +60,8 @@ def get_default_job_status_summary() -> dict:
 
 
 class PluginInstance(AsyncDeletableModel):
+    MAX_REMOTE_CLEANUP_RETRIES = 5
+
     title = models.CharField(max_length=100, blank=True)
     start_date = models.DateTimeField(auto_now_add=True)
     end_date = models.DateTimeField(auto_now_add=True)
@@ -61,6 +71,10 @@ class PluginInstance(AsyncDeletableModel):
     raw = models.TextField(blank=True)
     size = models.BigIntegerField(default=0)
     error_code = models.CharField(max_length=7, blank=True)
+    remote_cleanup_status = models.CharField(max_length=30,
+                                             choices=REMOTE_CLEANUP_STATUS_CHOICES,
+                                             default='notStarted')
+    remote_cleanup_retry_count = models.IntegerField(default=0)
     previous = models.ForeignKey("self", on_delete=models.CASCADE, null=True,
                                  related_name='next')
     plugin = models.ForeignKey(Plugin, on_delete=models.CASCADE, related_name='instances')

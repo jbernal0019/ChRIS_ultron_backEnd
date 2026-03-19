@@ -110,11 +110,13 @@ class PluginInstanceCopyJob(PluginInstanceJob):
         the job is cancelled. Otherwise the job's execution status is fetched from the 
         remote.
         """
-        if self.c_plugin_inst.status == 'created':
+        current_status = self.c_plugin_inst.status
+
+        if current_status in ('created', 'waiting'):
 
             if self.c_plugin_inst.summary['pushPath']['status']:
-                return self.c_plugin_inst.status
-            
+                return current_status
+
             job_id = self.str_job_id
 
             if self._job_has_timeout():
@@ -136,21 +138,21 @@ class PluginInstanceCopyJob(PluginInstanceJob):
 
             logger.info(f'Successful job status response from pfcon url -->{pfcon_url}<--'
                         f' for copy job {job_id}: {json.dumps(d_resp, indent=4)}')
-            
+
             status = d_resp['compute']['status']
             logger.info(f'Current copy job {job_id} remote status = {status}')
             logger.info(f'Current copy job {job_id} plugin instance DB status = '
-                        f'{self.c_plugin_inst.status}')
+                        f'{current_status}')
 
             summary = self.get_job_status_summary(d_resp)
             self.c_plugin_inst.summary = summary
             raw = json_zip2str(d_resp)
             self.c_plugin_inst.raw = raw
 
-            # only update (atomically) if status='started' to avoid concurrency problems
+            # only update (atomically) if still in copy phase to avoid concurrency problems
             PluginInstance.objects.filter(
                 id=self.c_plugin_inst.id,
-                status='started').update(summary=summary, raw=raw)
+                status=current_status).update(summary=summary, raw=raw)
 
             if status == 'finishedSuccessfully':
                 self.handle_finished_successfully_status()
@@ -163,12 +165,11 @@ class PluginInstanceCopyJob(PluginInstanceJob):
     def cancel_exec(self):
         """
         Cancel a plugin instance copy job execution. It connects to the remote service
-        to cancel job.
+        to cancel job and schedules remote cleanup.
         """
         self.c_plugin_inst.status = 'cancelled'
         self.save_plugin_instance_final_status()
-        # TODO: schedule delete job in case there is data in the remote compute 
-        # to be deleted and then that job should schedule delete for this copy job
+        self.schedule_remote_cleanup()
 
     def delete(self):
         """
@@ -234,6 +235,7 @@ class PluginInstanceCopyJob(PluginInstanceJob):
 
             if param.type == 'unextpath':
                 unextpath_parameters_dict[param.flag] = value
+
             if param.type == 'path':
                 path_parameters_dict[param.flag] = value
         return unextpath_parameters_dict, path_parameters_dict
@@ -243,6 +245,7 @@ class PluginInstanceCopyJob(PluginInstanceJob):
         Handle the 'finishedSuccessfully' status returned by the remote compute.
         """
         job_id = self.str_job_id
+        
         logger.info(f'Successfully finished plugin instance copy job {job_id}')
         
         # data successfully copied so update instance summary
@@ -257,12 +260,13 @@ class PluginInstanceCopyJob(PluginInstanceJob):
         """
         job_id = self.str_job_id
         self.c_plugin_inst.status = 'cancelled'
-        logger.error(f'[CODE18,{job_id}]: Error while running copy job, remote compute ' 
+
+        logger.error(f'[CODE18,{job_id}]: Error while running copy job, remote compute '
                      f'returned finishedWithError status for job {job_id}')
+        
         self.c_plugin_inst.error_code = 'CODE18'
         self.save_plugin_instance_final_status()
-        # TODO: schedule delete job in case there is data in the remote compute 
-        # to be deleted and then that job should schedule delete for this copy job
+        self.schedule_remote_cleanup()
 
     def handle_undefined_status(self):
         """
@@ -270,9 +274,10 @@ class PluginInstanceCopyJob(PluginInstanceJob):
         """
         job_id = self.str_job_id
         self.c_plugin_inst.status = 'cancelled'
-        logger.error(f'[CODE18,{job_id}]: Error while running copy job, remote compute ' 
+
+        logger.error(f'[CODE18,{job_id}]: Error while running copy job, remote compute '
                      f'returned undefined status for job {job_id}')
+        
         self.c_plugin_inst.error_code = 'CODE18'
         self.save_plugin_instance_final_status()
-        # TODO: schedule delete job in case there is data in the remote compute 
-        # to be deleted and then that job should schedule delete for this copy job
+        self.schedule_remote_cleanup()

@@ -170,7 +170,7 @@ class PluginInstanceJob(abc.ABC):
         cr.save()
 
     def _submit(self, job_type: JobType, job_id: str, job_descriptors: dict, 
-                dfile: io.BytesIO | None = None, timeout: int = 30) -> dict:
+                dfile: io.BytesIO | None = None, timeout: int = 200) -> dict:
         """
         Submit job to a remote pfcon service.
         """
@@ -201,7 +201,7 @@ class PluginInstanceJob(abc.ABC):
                                                   dfile, timeout)
         return d_resp
 
-    def _get_status(self, job_type: JobType, job_id: str, timeout: int = 30) -> dict:
+    def _get_status(self, job_type: JobType, job_id: str, timeout: int = 100) -> dict:
         """
         Get job status from a remote pfcon service.
         """
@@ -224,7 +224,7 @@ class PluginInstanceJob(abc.ABC):
             d_resp = self.pfcon_client.get_job_status(job_type, job_id, timeout)
         return d_resp
 
-    def _delete(self, job_type: JobType, job_id: str, timeout: int = 30):
+    def _delete(self, job_type: JobType, job_id: str, timeout: int = 200):
         """
         Delete a job from a remote pfcon service.
         """
@@ -246,9 +246,58 @@ class PluginInstanceJob(abc.ABC):
             self._refresh_compute_resource_auth_token()
             self.pfcon_client.delete_job(job_type, job_id, timeout)
 
+    def schedule_remote_cleanup(self):
+        """
+        Schedule a remote cleanup operation to delete storeBase data and all containers
+        from the remote compute environment. This sets the remote_cleanup_status to
+        'deletingData' and schedules a PluginInstanceDeleteJob celery task.
+        """
+        from plugininstances.tasks import run_plugin_instance_job
+
+        job_id = self.str_job_id
+        logger.info(f'Scheduling remote cleanup for job {job_id}')
+
+        self.c_plugin_inst.remote_cleanup_status = 'deletingData'
+        self.c_plugin_inst.remote_cleanup_retry_count = 0
+        self.c_plugin_inst.save(update_fields=['remote_cleanup_status',
+                                               'remote_cleanup_retry_count'])
+        run_plugin_instance_job.delay(self.c_plugin_inst.id,
+                                      'PluginInstanceDeleteJob')
+
+    def delete_all_remote_containers(self) -> bool:
+        """
+        Delete all remote containers (copy, plugin, upload, delete) for this plugin
+        instance's job from the remote compute environment. Returns True if all
+        deletions succeeded, False if any failed.
+        """
+        job_id = self.str_job_id
+        cr = self.c_plugin_inst.compute_resource
+        all_succeeded = True
+        job_types = []
+
+        if cr.compute_requires_copy_job:
+            job_types.append(JobType.COPY)
+
+        job_types.append(JobType.PLUGIN)
+
+        if cr.compute_requires_upload_job:
+            job_types.append(JobType.UPLOAD)
+            
+        job_types.append(JobType.DELETE)
+
+        for job_type in job_types:
+            try:
+                self._delete(job_type, job_id)
+            except PfconRequestException:
+                logger.error(f'[CODE12,{job_id}]: Error deleting {job_type} container '
+                             f'from pfcon at url -->{self.pfcon_client.url}<--')
+                all_succeeded = False
+
+        return all_succeeded
+
     def _job_has_timeout(self) -> bool:
         """
-        Check if a job has timed out. If the associated job's execution time exceeds 
+        Check if a job has timed out. If the associated job's execution time exceeds
         the maximum set for the remote compute environment then the job has timed out.
         """
         max_job_exec_sec = self.c_plugin_inst.compute_resource.max_job_exec_seconds
@@ -259,4 +308,4 @@ class PluginInstanceJob(abc.ABC):
 
             if delta_seconds > max_job_exec_sec:
                 return True
-        return False    
+        return False

@@ -27,6 +27,7 @@ from core.models import ChrisFolder, ChrisFile, ChrisLinkFile
 from plugininstances.models import PluginInstance, PluginInstanceLock
 from userfiles.models import UserFile
 from .abstractjobs import PluginInstanceJob
+from .uploadjobs import PluginInstanceUploadJob
 
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ class PluginInstanceAppJob(PluginInstanceJob):
         }
 
         job_zip_file_content = None
-        job_timeout = 3000
+        job_timeout = 200
 
         if self.pfcon_client.pfcon_innetwork:
             output_dir = self.c_plugin_inst.get_output_path()
@@ -98,9 +99,6 @@ class PluginInstanceAppJob(PluginInstanceJob):
             if self.storage_env in ('filesystem', 'fslink'):
                 # remote pfcon requires both the input and output dirs to exist
                 os.makedirs(os.path.join(settings.MEDIA_ROOT, output_dir), exist_ok=True)
-
-                if self.storage_env == 'filesystem':
-                    job_timeout = 200
         else:
             # create zip file to transmit
             try:
@@ -239,12 +237,11 @@ class PluginInstanceAppJob(PluginInstanceJob):
     
     def cancel_exec(self):
         """
-        Cancel a plugin instance app job execution. It connects to the remote service
-        to cancel job.
+        Cancel a plugin instance app job execution and schedule remote cleanup.
         """
         self.c_plugin_inst.status = 'cancelled'
-        self.delete()
         self.save_plugin_instance_final_status()
+        self.schedule_remote_cleanup()
 
     def delete(self):
         """
@@ -327,6 +324,7 @@ class PluginInstanceAppJob(PluginInstanceJob):
 
             if param.type == 'unextpath':
                 unextpath_parameters_dict[param.flag] = value
+
             if param.type == 'path':
                 path_parameters_dict[param.flag] = value
         return unextpath_parameters_dict, path_parameters_dict
@@ -396,9 +394,11 @@ class PluginInstanceAppJob(PluginInstanceJob):
         """
         job_id = self.str_job_id
         data_dir = os.path.join(os.path.expanduser("~"), 'data')
+
         str_inputdir = os.path.join(data_dir, 'squashEmptyDir').lstrip('/')
         str_squashFile = os.path.join(str_inputdir, 'squashEmptyDir.txt')
         str_squashMsg = 'Empty input dir.'
+
         try:
             if not self.storage_manager.obj_exists(str_squashFile):
                 with io.StringIO(str_squashMsg) as f:
@@ -480,6 +480,7 @@ class PluginInstanceAppJob(PluginInstanceJob):
                                          f'{obj_path} from storage, detail: {str(e)}')
                             self.c_plugin_inst.error_code = 'CODE08'
                             raise
+                        
                         zip_path = obj_path.replace(storage_path, '', 1).lstrip('/')
                         job_data_zip.writestr(zip_path, contents)
                         all_obj_paths.add(obj_path)
@@ -498,6 +499,7 @@ class PluginInstanceAppJob(PluginInstanceJob):
                 filenames = job_zip.namelist()
                 logger.info(f'{len(filenames)} files to decompress for job {job_id}')
                 output_path = self.c_plugin_inst.get_output_path() + '/'
+
                 for fname in filenames:
                     content = job_zip.read(fname)
                     storage_fname = output_path + fname.lstrip('/')
@@ -746,6 +748,18 @@ class PluginInstanceAppJob(PluginInstanceJob):
         """
         Handle the 'finishedSuccessfully' status returned by the remote compute.
         """
+        if self.pfcon_client.requires_upload_job:
+            # only update (atomically) if status='started' to avoid concurrency problems
+            PluginInstance.objects.filter(
+                id=self.c_plugin_inst.id,
+                status='started').update(status='registeringFiles')
+            
+            # upload job will fetch files into CUBE storage; after that finishes
+            # the register_output_files_on_success method is called once to register with the DB
+            plg_inst_upload_job = PluginInstanceUploadJob(self.c_plugin_inst)
+            plg_inst_upload_job.run()
+            return
+        
         plg_inst_lock = PluginInstanceLock(plugin_inst=self.c_plugin_inst)
         try:
             plg_inst_lock.save()
@@ -759,75 +773,84 @@ class PluginInstanceAppJob(PluginInstanceJob):
             # only one concurrent async task should execute this lock section of the code
             self.c_plugin_inst.status = 'registeringFiles'
             self.c_plugin_inst.save(update_fields=['status'])
+            self.register_output_files_on_success()
 
-            pfcon_url = self.pfcon_client.url
-            job_id = self.str_job_id
-            logger.info(f'Sending job data file request to pfcon url -->{pfcon_url}<-- '
-                        f'for job {job_id}')
+    def register_output_files_on_success(self):
+        """
+        Fetch output file data/metadata from pfcon, verify/unpack files in storage,
+        handle special path parameters and register all output files in the DB. Sets the
+        final plugin instance status and schedules remote cleanup.
+        """
+        pfcon_url = self.pfcon_client.url
+        job_id = self.str_job_id
+        logger.info(f'Sending job data file request to pfcon url -->{pfcon_url}<-- '
+                    f'for job {job_id}')
+        try:
+            if self.pfcon_client.pfcon_innetwork:
+                job_output_path = self.c_plugin_inst.get_output_path()
+                job_file_content = self._get_job_json_data(job_id, job_output_path)
+            else:
+                job_file_content = self._get_job_zip_data(job_id)
+        except PfconRequestException as e:
+            logger.error(f'[CODE03,{job_id}]: Error fetching data file from pfcon '
+                         f'url -->{pfcon_url}<--, detail: {str(e)}')
+            self.c_plugin_inst.error_code = 'CODE03'
+            self.c_plugin_inst.status = 'cancelled'  # giving up
+        else:
             try:
+                # data successfully downloaded so update summary and instance status
+                self.c_plugin_inst.summary['pullPath']['status'] = True
+                self.c_plugin_inst.save(update_fields=['summary'])
+
                 if self.pfcon_client.pfcon_innetwork:
-                    job_output_path = self.c_plugin_inst.get_output_path()
-                    job_file_content = self._get_job_json_data(job_id, job_output_path)
+                    logger.info('Checking that all remote output files for job '
+                                '%s exist in file storage', job_id)
+                    self.check_files_from_json_exist(job_file_content)
                 else:
-                    job_file_content = self._get_job_zip_data(job_id)
-            except PfconRequestException as e:
-                logger.error(f'[CODE03,{job_id}]: Error fetching data file from pfcon '
-                             f'url -->{pfcon_url}<--, detail: {str(e)}')
-                self.c_plugin_inst.error_code = 'CODE03'
+                    logger.info('Uploading remote output files for job %s to '
+                                'file storage', job_id)
+                    self.unpack_zip_file(job_file_content)
+
+                logger.info('Copying local output files for job %s in file '
+                            'storage', job_id)
+                # upload files from unextracted path parameters
+                d_unextpath_params, _ = self.get_plugin_instance_path_parameters()
+                if d_unextpath_params:
+                    if (self.pfcon_client.pfcon_innetwork and self.storage_env ==
+                            'filesystem'):
+                        self._handle_unextpath_parameters_innetwork_filesystem(
+                            d_unextpath_params)
+                    else:
+                        self._handle_unextpath_parameters(d_unextpath_params)
+
+                # upload files from filtered input instance paths ('ts' plugins)
+                if self.c_plugin_inst.plugin.meta.type == 'ts':
+                    d_ts_input_objs, tf = self.get_ts_plugin_instance_input_objs()
+                    self._handle_ts_unextracted_input_objs(d_ts_input_objs, tf)
+
+                self._register_output_files()  # register output files in the DB
+            except Exception:
                 self.c_plugin_inst.status = 'cancelled'  # giving up
             else:
-                try:
-                    # data successfully downloaded so update summary and instance status
-                    self.c_plugin_inst.summary['pullPath']['status'] = True
-                    self.c_plugin_inst.save(update_fields=['summary'])
+                self.c_plugin_inst.status = 'finishedSuccessfully'
+        self.schedule_remote_cleanup()
+        self.save_plugin_instance_final_status()
 
-                    if self.pfcon_client.pfcon_innetwork:
-                        logger.info('Checking that all remote output files for job '
-                                    '%s exist in file storage', job_id)
-                        self.check_files_from_json_exist(job_file_content)
-                    else:
-                        logger.info('Uploading remote output files for job %s to '
-                                    'file storage', job_id)
-                        self.unpack_zip_file(job_file_content)
-
-                    logger.info('Copying local output files for job %s in file '
-                                'storage', job_id)
-                    # upload files from unextracted path parameters
-                    d_unextpath_params, _ = self.get_plugin_instance_path_parameters()
-                    if d_unextpath_params:
-                        if (self.pfcon_client.pfcon_innetwork and self.storage_env ==
-                                'filesystem'):
-                            self._handle_unextpath_parameters_innetwork_filesystem(
-                                d_unextpath_params)
-                        else:
-                            self._handle_unextpath_parameters(d_unextpath_params)
-
-                    # upload files from filtered input instance paths ('ts' plugins)
-                    if self.c_plugin_inst.plugin.meta.type == 'ts':
-                        d_ts_input_objs, tf = self.get_ts_plugin_instance_input_objs()
-                        self._handle_ts_unextracted_input_objs(d_ts_input_objs, tf)
-
-                    self._register_output_files()  # register output files in the DB
-                except Exception:
-                    self.c_plugin_inst.status = 'cancelled'  # giving up
-                else:
-                    self.c_plugin_inst.status = 'finishedSuccessfully'
-            self.delete()
-            self.save_plugin_instance_final_status()
-
-    def _get_job_json_data(self, job_id, job_output_path, timeout=1000):
+    def _get_job_json_data(self, job_id, job_output_path, timeout=500):
         """
         Get job json data from a remote in-network pfcon service.
         """
         try:
-            json_content = self.pfcon_client.get_plugin_job_json_data(job_id, job_output_path,
-                                                               timeout)
+            json_content = self.pfcon_client.get_plugin_job_json_data(job_id, 
+                                                                      job_output_path,
+                                                                      timeout)
         except PfconRequestInvalidTokenException:
             logger.info(f'Auth token has expired while getting json data for plugin job'
                         f' {job_id} from pfcon url -->{self.pfcon_client.url}<--')
             self._refresh_compute_resource_auth_token()
-            json_content = self.pfcon_client.get_plugin_job_json_data(job_id, job_output_path,
-                                                               timeout)
+            json_content = self.pfcon_client.get_plugin_job_json_data(job_id, 
+                                                                      job_output_path,
+                                                                      timeout)
         return json_content
 
     def _get_job_zip_data(self, job_id, timeout=9000):
@@ -847,6 +870,18 @@ class PluginInstanceAppJob(PluginInstanceJob):
         """
         Handle the 'finishedWithError' status returned by the remote compute.
         """
+        if self.pfcon_client.requires_upload_job:
+            # only update (atomically) if status='started' to avoid concurrency problems
+            PluginInstance.objects.filter(
+                id=self.c_plugin_inst.id,
+                status='started').update(status='registeringFiles')
+            
+            # upload job will fetch files into CUBE storage; after that finishes
+            # the register_output_files_on_erro method is called once to register with the DB
+            plg_inst_upload_job = PluginInstanceUploadJob(self.c_plugin_inst)
+            plg_inst_upload_job.run()
+            return
+        
         plg_inst_lock = PluginInstanceLock(plugin_inst=self.c_plugin_inst)
         try:
             plg_inst_lock.save()
@@ -860,43 +895,50 @@ class PluginInstanceAppJob(PluginInstanceJob):
             # only one concurrent async task should execute this lock section of the code
             self.c_plugin_inst.status = 'registeringFiles'
             self.c_plugin_inst.save(update_fields=['status'])
+            self.register_output_files_on_error()
 
-            pfcon_url = self.pfcon_client.url
-            job_id = self.str_job_id
-            logger.info(f'Sending job data file request to pfcon url -->{pfcon_url}<-- '
-                        f'for job {job_id}')
-            try:
-                if self.pfcon_client.pfcon_innetwork:
-                    job_output_path = self.c_plugin_inst.get_output_path()
-                    job_file_content = self._get_job_json_data(job_id, job_output_path)
-                else:
-                    job_file_content = self._get_job_zip_data(job_id)
-            except PfconRequestException as e:
-                logger.error(f'[CODE03,{job_id}]: Error fetching data file from pfcon '
-                             f'url -->{pfcon_url}<--, detail: {str(e)}')
-                self.c_plugin_inst.error_code = 'CODE03'
-                self.c_plugin_inst.status = 'cancelled'  # giving up
+    def register_output_files_on_error(self):
+        """
+        Fetch output file data/metadata from pfcon, verify/unpack files in storage and 
+        register all output files in the DB. Sets the final plugin instance status 
+        and schedules remote cleanup.
+        """
+        pfcon_url = self.pfcon_client.url
+        job_id = self.str_job_id
+        logger.info(f'Sending job data file request to pfcon url -->{pfcon_url}<-- '
+                    f'for job {job_id}')
+        try:
+            if self.pfcon_client.pfcon_innetwork:
+                job_output_path = self.c_plugin_inst.get_output_path()
+                job_file_content = self._get_job_json_data(job_id, job_output_path)
             else:
-                try:
-                    # data successfully downloaded so update summary and instance status
-                    self.c_plugin_inst.summary['pullPath']['status'] = True
-                    self.c_plugin_inst.save(update_fields=['summary'])
+                job_file_content = self._get_job_zip_data(job_id)
+        except PfconRequestException as e:
+            logger.error(f'[CODE03,{job_id}]: Error fetching data file from pfcon '
+                            f'url -->{pfcon_url}<--, detail: {str(e)}')
+            self.c_plugin_inst.error_code = 'CODE03'
+            self.c_plugin_inst.status = 'cancelled'  # giving up
+        else:
+            try:
+                # data successfully downloaded so update summary and instance status
+                self.c_plugin_inst.summary['pullPath']['status'] = True
+                self.c_plugin_inst.save(update_fields=['summary'])
 
-                    if self.pfcon_client.pfcon_innetwork:
-                        logger.info('Checking that all remote output files for job %s '
-                                    'exist in file storage', job_id)
-                        self.check_files_from_json_exist(job_file_content)
-                    else:
-                        logger.info('Uploading remote output files for job %s to file '
-                                    'storage', job_id)
-                        self.unpack_zip_file(job_file_content)
+                if self.pfcon_client.pfcon_innetwork:
+                    logger.info('Checking that all remote output files for job %s '
+                                'exist in file storage', job_id)
+                    self.check_files_from_json_exist(job_file_content)
+                else:
+                    logger.info('Uploading remote output files for job %s to file '
+                                'storage', job_id)
+                    self.unpack_zip_file(job_file_content)
 
-                    self._register_output_files()  # register output files in the DB
-                except Exception:
-                    pass  # giving up
-            self.c_plugin_inst.status = 'finishedWithError'
-            self.delete()
-            self.save_plugin_instance_final_status()
+                self._register_output_files()  # register output files in the DB
+            except Exception:
+                pass  # giving up
+        self.c_plugin_inst.status = 'finishedWithError'
+        self.schedule_remote_cleanup()
+        self.save_plugin_instance_final_status()
 
     def handle_undefined_status(self):
         """

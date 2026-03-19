@@ -27,7 +27,7 @@ task_routes = {
     'plugininstances.tasks.run_plugin_instance_job': {'queue': 'main1'},
     'plugininstances.tasks.check_plugin_instance_job_exec_status': {'queue': 'main2'},
     'plugininstances.tasks.cancel_plugin_instance_job': {'queue': 'main2'},
-    'plugininstances.tasks.delete_plugin_instance_job_from_remote': {'queue': 'main2'},
+    'plugininstances.tasks.delete_plugin_instance_containers_from_remote': {'queue': 'main2'},
     'plugininstances.tasks.schedule_waiting_plugin_instances':
         {'queue': 'periodic'},
     'plugininstances.tasks.check_started_plugin_instances_exec_status':
@@ -39,6 +39,10 @@ task_routes = {
     'plugininstances.tasks.cancel_plugin_instances_stuck_in_lock':
         {'queue': 'periodic'},
     'plugininstances.tasks.cancel_plugin_instances_stuck_in_scheduled_status':
+        {'queue': 'periodic'},
+    'plugininstances.tasks.check_registeringfiles_upload_exec_status':
+        {'queue': 'periodic'},
+    'plugininstances.tasks.handle_remote_cleanup':
         {'queue': 'periodic'},
     'plugininstances.tasks.delete_plugin_instances_jobs_from_remote':
         {'queue': 'periodic'},
@@ -75,6 +79,14 @@ app.conf.beat_schedule = {
     'cancel-waiting-plugin-instances-every-30-seconds': {
         'task': 'plugininstances.tasks.cancel_waiting_plugin_instances',
         'schedule': POLL_INTERVAL,
+    },
+    'check-registeringfiles-upload-exec-status': {
+        'task': 'plugininstances.tasks.check_registeringfiles_upload_exec_status',
+        'schedule': POLL_INTERVAL,
+    },
+    'handle-remote-cleanup-every-60-seconds': {
+        'task': 'plugininstances.tasks.handle_remote_cleanup',
+        'schedule': 60.0,
     },
     'cancel-plugin-instances-stuck-in-lock-every-7200-seconds': {
         'task': 'plugininstances.tasks.cancel_plugin_instances_stuck_in_lock',

@@ -218,7 +218,8 @@ class PluginInstanceDetail(generics.RetrieveUpdateDestroyAPIView):
             if instance.status != 'cancelled':
                 descendants = instance.get_descendant_instances()
 
-                if instance.status == 'started':
+                if instance.status in ('created', 'waiting', 'scheduled', 'started',
+                                       'registeringFiles'):
                     cancel_plugin_instance_job.delay(instance.id)  # call async task
 
                 PluginInstance.objects.filter(
@@ -237,7 +238,8 @@ class PluginInstanceDetail(generics.RetrieveUpdateDestroyAPIView):
         instance = self.get_object()
         descendants = instance.get_descendant_instances()
 
-        if instance.status == 'started':
+        if instance.status in ('created', 'waiting', 'scheduled', 'started',
+                               'registeringFiles'):
             cancel_plugin_instance_job(instance.id)
 
         plg_inst_ids = []
