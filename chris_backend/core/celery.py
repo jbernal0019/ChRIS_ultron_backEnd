@@ -32,7 +32,7 @@ task_routes = {
         {'queue': 'periodic'},
     'plugininstances.tasks.check_started_plugin_instances_exec_status':
         {'queue': 'periodic'},
-    'plugininstances.tasks.check_created_plugin_instances_copy_exec_status':
+    'plugininstances.tasks.check_copying_plugin_instances_exec_status':
         {'queue': 'periodic'},
     'plugininstances.tasks.cancel_waiting_plugin_instances':
         {'queue': 'periodic'},
@@ -40,7 +40,7 @@ task_routes = {
         {'queue': 'periodic'},
     'plugininstances.tasks.cancel_plugin_instances_stuck_in_scheduled_status':
         {'queue': 'periodic'},
-    'plugininstances.tasks.check_registeringfiles_upload_exec_status':
+    'plugininstances.tasks.check_uploading_plugin_instances_exec_status':
         {'queue': 'periodic'},
     'plugininstances.tasks.handle_remote_cleanup':
         {'queue': 'periodic'},
@@ -73,7 +73,7 @@ app.conf.beat_schedule = {
         'schedule': POLL_INTERVAL,
     },
     'check-created-plugin-instances-copy-exec-status-every-30-seconds': {
-        'task': 'plugininstances.tasks.check_created_plugin_instances_copy_exec_status',
+        'task': 'plugininstances.tasks.check_copying_plugin_instances_exec_status',
         'schedule': POLL_INTERVAL,
     },
     'cancel-waiting-plugin-instances-every-30-seconds': {
@@ -81,7 +81,7 @@ app.conf.beat_schedule = {
         'schedule': POLL_INTERVAL,
     },
     'check-registeringfiles-upload-exec-status': {
-        'task': 'plugininstances.tasks.check_registeringfiles_upload_exec_status',
+        'task': 'plugininstances.tasks.check_uploading_plugin_instances_exec_status',
         'schedule': POLL_INTERVAL,
     },
     'handle-remote-cleanup-every-60-seconds': {

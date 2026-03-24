@@ -67,9 +67,11 @@ class PluginInstanceAppJob(PluginInstanceJob):
             elif not inputdirs and not self.pfcon_client.requires_copy_job:
                 inputdirs.append(self.manage_empty_inputdir())
         except Exception as e:
-            logger.error(f'[CODE01,{job_id}]: Error creating copy job, detail: {str(e)}')
+            logger.error(f'[CODE01,{job_id}]: Error creating plugin job, detail: {str(e)}')
             self.c_plugin_inst.status = 'cancelled'  # giving up
-            self.save_plugin_instance_final_status()
+            self.c_plugin_inst.error_code = 'CODE01'
+            self.c_plugin_inst.save(update_fields=['status', 'error_code'])
+            self.schedule_remote_cleanup()
             return
 
         # create job description dictionary
@@ -105,7 +107,9 @@ class PluginInstanceAppJob(PluginInstanceJob):
                 job_zip_file = self.create_zip_file(inputdirs)
             except Exception:
                 self.c_plugin_inst.status = 'cancelled'  # giving up
-                self.save_plugin_instance_final_status()
+                self.c_plugin_inst.error_code = 'CODE01'
+                self.c_plugin_inst.save(update_fields=['status', 'error_code'])
+                self.schedule_remote_cleanup()
                 return
             job_zip_file_content = job_zip_file.getvalue()
             job_timeout = 9000
@@ -119,9 +123,11 @@ class PluginInstanceAppJob(PluginInstanceJob):
         except PfconRequestException as e:
             logger.error(f'[CODE01,{job_id}]: Error submitting plugin job to pfcon url '
                          f'-->{pfcon_url}<--, detail: {str(e)}')
+            
             self.c_plugin_inst.error_code = 'CODE01'
             self.c_plugin_inst.status = 'cancelled'  # giving up
-            self.save_plugin_instance_final_status()
+            self.c_plugin_inst.save(update_fields=['status', 'error_code'])
+            self.schedule_remote_cleanup()
         else:
             logger.info(f'Successfully submitted plugin job {job_id} to pfcon url '
                         f'-->{pfcon_url}<--, response: {json.dumps(d_resp, indent=4)}')
@@ -207,7 +213,7 @@ class PluginInstanceAppJob(PluginInstanceJob):
             except PfconRequestException as e:
                 logger.error(f'[CODE02,{job_id}]: Error getting plugin job status at '
                              f'pfcon url -->{pfcon_url}<--, detail: {str(e)}')
-                return self.c_plugin_inst.status  # return, CUBE will retry later
+                return self.c_plugin_inst.status  # return, periodic task will retry later
 
             logger.info(f'Successful job status response from pfcon url -->{pfcon_url}<--'
                         f' for plugin job {job_id}: {json.dumps(d_resp, indent=4)}')
@@ -240,7 +246,7 @@ class PluginInstanceAppJob(PluginInstanceJob):
         Cancel a plugin instance app job execution and schedule remote cleanup.
         """
         self.c_plugin_inst.status = 'cancelled'
-        self.save_plugin_instance_final_status()
+        self.c_plugin_inst.save(update_fields=['status'])
         self.schedule_remote_cleanup()
 
     def delete(self):
@@ -750,9 +756,10 @@ class PluginInstanceAppJob(PluginInstanceJob):
         """
         if self.pfcon_client.requires_upload_job:
             # only update (atomically) if status='started' to avoid concurrency problems
+            self.c_plugin_inst.status = 'uploading'
             PluginInstance.objects.filter(
                 id=self.c_plugin_inst.id,
-                status='started').update(status='registeringFiles')
+                status='started').update(status='uploading', end_date=timezone.now())
             
             # upload job will fetch files into CUBE storage; after that finishes
             # the register_output_files_on_success method is called once to register with the DB
@@ -768,11 +775,13 @@ class PluginInstanceAppJob(PluginInstanceJob):
             # only update (atomically) if status='started' to avoid concurrency problems
             PluginInstance.objects.filter(
                 id=self.c_plugin_inst.id,
-                status='started').update(status='registeringFiles')
+                status='started').update(status='registeringFiles', 
+                                         end_date=timezone.now())
         else:
             # only one concurrent async task should execute this lock section of the code
             self.c_plugin_inst.status = 'registeringFiles'
-            self.c_plugin_inst.save(update_fields=['status'])
+            self.c_plugin_inst.end_date=timezone.now()
+            self.c_plugin_inst.save(update_fields=['status', 'end_date'])
             self.register_output_files_on_success()
 
     def register_output_files_on_success(self):
@@ -833,8 +842,9 @@ class PluginInstanceAppJob(PluginInstanceJob):
                 self.c_plugin_inst.status = 'cancelled'  # giving up
             else:
                 self.c_plugin_inst.status = 'finishedSuccessfully'
+
+        self.c_plugin_inst.save(update_fields=['status', 'error_code'])
         self.schedule_remote_cleanup()
-        self.save_plugin_instance_final_status()
 
     def _get_job_json_data(self, job_id, job_output_path, timeout=500):
         """
@@ -872,9 +882,10 @@ class PluginInstanceAppJob(PluginInstanceJob):
         """
         if self.pfcon_client.requires_upload_job:
             # only update (atomically) if status='started' to avoid concurrency problems
+            self.c_plugin_inst.status = 'uploading'
             PluginInstance.objects.filter(
                 id=self.c_plugin_inst.id,
-                status='started').update(status='registeringFiles')
+                status='started').update(status='uploading', end_date=timezone.now())
             
             # upload job will fetch files into CUBE storage; after that finishes
             # the register_output_files_on_erro method is called once to register with the DB
@@ -890,11 +901,13 @@ class PluginInstanceAppJob(PluginInstanceJob):
             # only update (atomically) if status='started' to avoid concurrency problems
             PluginInstance.objects.filter(
                 id=self.c_plugin_inst.id,
-                status='started').update(status='registeringFiles')
+                status='started').update(status='registeringFiles', 
+                                         end_date=timezone.now())
         else:
             # only one concurrent async task should execute this lock section of the code
             self.c_plugin_inst.status = 'registeringFiles'
-            self.c_plugin_inst.save(update_fields=['status'])
+            self.c_plugin_inst.end_date=timezone.now()
+            self.c_plugin_inst.save(update_fields=['status', 'end_date'])
             self.register_output_files_on_error()
 
     def register_output_files_on_error(self):
@@ -936,9 +949,10 @@ class PluginInstanceAppJob(PluginInstanceJob):
                 self._register_output_files()  # register output files in the DB
             except Exception:
                 pass  # giving up
+            
         self.c_plugin_inst.status = 'finishedWithError'
+        self.c_plugin_inst.save(update_fields=['status', 'error_code'])
         self.schedule_remote_cleanup()
-        self.save_plugin_instance_final_status()
 
     def handle_undefined_status(self):
         """

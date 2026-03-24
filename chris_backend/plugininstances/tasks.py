@@ -5,6 +5,7 @@ from datetime import timedelta
 
 from django.db.models import Q
 from django.utils import timezone
+from django.conf import settings
 
 from celery import shared_task
 from celery.signals import task_failure
@@ -50,24 +51,6 @@ def skip_if_running(f):
                     return None
         return f(self, *args, **kwargs)
     return wrapped
-
-
-def _detect_job_class_name(plugin_inst):
-    """
-    Auto-detect the appropriate job class name based on the plugin instance's current
-    status and compute resource configuration.
-    """
-    cr = plugin_inst.compute_resource
-    status = plugin_inst.status
-
-    if status in ('created', 'waiting') and cr and cr.compute_requires_copy_job:
-        return 'PluginInstanceCopyJob'
-
-    if status == 'registeringFiles' and cr and cr.compute_requires_upload_job:
-        if not plugin_inst.summary.get('pullPath', {}).get('status', False):
-            return 'PluginInstanceUploadJob'
-
-    return 'PluginInstanceAppJob'
 
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3})
@@ -139,6 +122,22 @@ def cancel_plugin_instance_job(plg_inst_id, job_class_name=None):
         plg_inst_job.cancel_exec()
 
 
+def _detect_job_class_name(plugin_inst):
+    """
+    Auto-detect the appropriate job class name based on the plugin instance's current
+    status and compute resource configuration.
+    """
+    cr = plugin_inst.compute_resource
+    status = plugin_inst.status
+
+    if status == 'copying' and cr.compute_requires_copy_job:
+        return 'PluginInstanceCopyJob'
+
+    if status == 'uploading' and cr.compute_requires_upload_job:
+        return 'PluginInstanceUploadJob'
+    return 'PluginInstanceAppJob'
+
+
 @shared_task
 def delete_plugin_instance_containers_from_remote(plg_inst_id):
     """
@@ -162,19 +161,6 @@ def delete_plugin_instance_containers_from_remote(plg_inst_id):
 
     plugin_inst.save(update_fields=['remote_cleanup_status',
                                      'remote_cleanup_retry_count'])
-
-
-def _schedule_plugin_instance(plg_inst):
-    """
-    Schedule the appropriate job for a waiting plugin instance based on its compute
-    resource configuration.
-    """
-    cr = plg_inst.compute_resource
-    if cr and cr.compute_requires_copy_job:
-        run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceCopyJob')
-    else:
-        plg_inst.set_status('scheduled')
-        run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceAppJob')
 
 
 @shared_task(bind=True)
@@ -208,11 +194,26 @@ def schedule_waiting_plugin_instances(self):  # task is passed info about itself
         _schedule_plugin_instance(plg_inst)
 
 
+def _schedule_plugin_instance(plg_inst):
+    """
+    Schedule the appropriate job for a waiting plugin instance based on its compute
+    resource configuration.
+    """
+    cr = plg_inst.compute_resource
+
+    if cr.compute_requires_copy_job:
+        plg_inst.set_status('copying')
+        run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceCopyJob')
+    else:
+        plg_inst.set_status('scheduled')
+        run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceAppJob')
+        
+
 @shared_task
 def check_started_plugin_instances_exec_status():
     """
-    Check the execution status of the app jobs corresponding to all the plugin instances
-    with 'started' DB status.
+    Check the execution status of the plugin jobs corresponding to all the plugin
+    instances with 'started' DB status.
     """
     instances = PluginInstance.objects.filter(status='started')
     for plg_inst in instances:
@@ -220,30 +221,27 @@ def check_started_plugin_instances_exec_status():
 
 
 @shared_task
-def check_created_plugin_instances_copy_exec_status():
+def check_copying_plugin_instances_exec_status():
     """
     Check the execution status of the copy jobs corresponding to all the plugin instances
-    in 'created' or 'waiting' DB status when remote compute requires copy jobs.
+    in 'copying' DB status when remote compute requires copy jobs.
     """
-    instances = PluginInstance.objects.filter(
-        status__in=('created', 'waiting'),
-        compute_resource__compute_requires_copy_job=True
-    )
-    for plg_inst in instances:
-        check_plugin_instance_job_exec_status.delay(plg_inst.id, 'PluginInstanceCopyJob')
+    if settings.STORAGE_ENV not in ('filesystem', 'zipfile'):
+        instances = PluginInstance.objects.filter(status='copying')
+        for plg_inst in instances:
+            check_plugin_instance_job_exec_status.delay(plg_inst.id, 
+                                                        'PluginInstanceCopyJob')
 
 
 @shared_task
-def check_registeringfiles_upload_exec_status():
+def check_uploading_plugin_instances_exec_status():
     """
-    Check the execution status of the upload jobs corresponding to all the plugin instances
-    with 'registeringFiles' DB status when remote compute requires upload jobs and the
-    pullPath status is still False.
+    Check the execution status of the upload jobs corresponding to all the plugin 
+    instances with 'uploading' DB status when remote compute requires upload jobs.
     """
-    instances = PluginInstance.objects.filter(status='registeringFiles')
-    for plg_inst in instances:
-        if (plg_inst.compute_resource.compute_requires_upload_job and
-                not plg_inst.summary.get('pullPath', {}).get('status', False)):
+    if settings.STORAGE_ENV not in ('filesystem', 'fslink', 'zipfile'):
+        instances = PluginInstance.objects.filter(status='uploading')
+        for plg_inst in instances:
             check_plugin_instance_job_exec_status.delay(plg_inst.id, 
                                                         'PluginInstanceUploadJob')
 
@@ -267,39 +265,24 @@ def handle_remote_cleanup():
         delete_plugin_instance_containers_from_remote.delay(plg_inst.id)
 
 
-def _cancel_waiting_instance(plg_inst):
-    """
-    Cancel a waiting plugin instance. If a copy job may be running on pfcon,
-    schedule a proper cancel task. Otherwise just update the status.
-    """
-    cr = plg_inst.compute_resource
-    if cr and cr.compute_requires_copy_job:
-        cancel_plugin_instance_job.delay(plg_inst.id)
-    else:
-        plg_inst.status = 'cancelled'
-        plg_inst.save(update_fields=['status'])
-
-
 @shared_task
 def cancel_waiting_plugin_instances():
     """
-    Cancel the jobs corresponding to all plugin instances in 'waiting' DB
-    status when their previous plugin instance is in either 'finishedWithError' or
-    'cancelled' DB status. Plugin instances of type 'ts' are cancelled if at least one
-    of their ancestors is in any of those DB statuses. Instances with copy jobs on pfcon
-    get a proper cancel task scheduled for remote cleanup.
+    Cancel all plugin instances in 'waiting' DB status when their previous plugin 
+    instance is in either 'finishedWithError' or 'cancelled' DB status. Plugin 
+    instances of type 'ts' are cancelled if at least one of their ancestors is in 
+    any of those DB statuses.
     """
     lookup = Q(previous__status='finishedWithError') | Q(previous__status='cancelled')
-
-    instances = PluginInstance.objects.filter(
+    PluginInstance.objects.filter(
         status='waiting'
-    ).filter(lookup)
-    for plg_inst in instances:
-        _cancel_waiting_instance(plg_inst)
+    ).filter(lookup).update(status='cancelled')
 
     ts_instances = PluginInstance.objects.filter(
         status='waiting'
     ).filter(plugin__meta__type='ts')
+
+    plg_inst_ids = []
 
     for plg_inst in ts_instances:
         param = plg_inst.string_param.filter(plugin_param__name='plugininstances').first()
@@ -310,8 +293,10 @@ def cancel_waiting_plugin_instances():
 
             for parent in parents:
                 if parent.status in ('finishedWithError', 'cancelled'):
-                    _cancel_waiting_instance(plg_inst)
+                    plg_inst_ids.append(plg_inst.id)
                     break
+
+    PluginInstance.objects.filter(pk__in=plg_inst_ids).update(status='cancelled')
 
 
 @shared_task
@@ -336,7 +321,7 @@ def cancel_plugin_instances_stuck_in_lock():
     crash). Then schedule a new cancel request for all of them.
     """
     cutoff = timezone.now() - timedelta(minutes=240)  # hardcoded cutoff delta
-    lookup = Q(status='started') | Q(status='registeringFiles')
+    lookup = Q(status='started') | Q(status='uploading')| Q(status='registeringFiles')
 
     instances = PluginInstance.objects.filter(lookup).filter(lock__start_date__lt=cutoff)
 

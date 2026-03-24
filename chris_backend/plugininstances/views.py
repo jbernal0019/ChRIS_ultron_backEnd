@@ -11,7 +11,7 @@ from plugins.models import Plugin
 
 from .models import (PluginInstance, PluginInstanceFilter, PluginInstanceSplit,
                      StrParameter, FloatParameter, IntParameter, BoolParameter,
-                     PathParameter, UnextpathParameter)
+                     PathParameter, UnextpathParameter, ACTIVE_STATUSES)
 from .serializers import (PARAMETER_SERIALIZERS, GenericParameterSerializer,
                           PluginInstanceSplitSerializer, PluginInstanceSerializer)
 from .permissions import (IsOwnerOrChrisOrHasFeedPermissionReadOnlyOrPublicFeedReadOnly,
@@ -218,8 +218,7 @@ class PluginInstanceDetail(generics.RetrieveUpdateDestroyAPIView):
             if instance.status != 'cancelled':
                 descendants = instance.get_descendant_instances()
 
-                if instance.status in ('created', 'waiting', 'scheduled', 'started',
-                                       'registeringFiles'):
+                if instance.status in ACTIVE_STATUSES:
                     cancel_plugin_instance_job.delay(instance.id)  # call async task
 
                 PluginInstance.objects.filter(
@@ -238,14 +237,12 @@ class PluginInstanceDetail(generics.RetrieveUpdateDestroyAPIView):
         instance = self.get_object()
         descendants = instance.get_descendant_instances()
 
-        if instance.status in ('created', 'waiting', 'scheduled', 'started',
-                               'registeringFiles'):
+        if instance.status in ACTIVE_STATUSES:
             cancel_plugin_instance_job(instance.id)
 
         plg_inst_ids = []
         for plg_inst in descendants:
-            if plg_inst.status not in ('finishedSuccessfully', 'finishedWithError',
-                                       'cancelled'):
+            if plg_inst.status in ACTIVE_STATUSES:
                 plg_inst_ids.append(plg_inst.id)
 
         PluginInstance.objects.filter(pk__in=plg_inst_ids).update(status='cancelled')

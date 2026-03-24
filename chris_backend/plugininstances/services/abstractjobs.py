@@ -132,120 +132,6 @@ class PluginInstanceJob(abc.ABC):
                 d_jobStatusSummary['compute']['return']['job_logs'] = logs[-1800:]
         return d_jobStatusSummary
 
-    def save_plugin_instance_final_status(self):
-        """
-        Set the plugin instance's output folder permissions recursively and log and
-        save the instance's final status to the DB.
-        """
-        job_id = self.str_job_id
-        logger.info(f"Setting output folder's permissions for job {job_id} ...")
-
-        for group in self.c_plugin_inst.feed.shared_groups.all():
-            self.c_plugin_inst.output_folder.parent.grant_group_permission(group, 'w')
-
-        for user in self.c_plugin_inst.feed.shared_users.all():
-            self.c_plugin_inst.output_folder.parent.grant_user_permission(user, 'w')
-
-        if self.c_plugin_inst.feed.public:
-            self.c_plugin_inst.output_folder.parent.grant_public_access()
-
-        logger.info(f"Saving plugin instance final status for job {job_id} as "
-                    f"'{self.c_plugin_inst.status}'")
-        
-        self.c_plugin_inst.end_date = timezone.now()
-
-        logger.info(f"Saving plugin instance end_date for job {job_id} as "
-                    f"'{self.c_plugin_inst.end_date}'")
-        self.c_plugin_inst.save()
-
-    def _refresh_compute_resource_auth_token(self):
-        """
-        Get a new auth token from a remote pfcon service and update the DB.
-        """
-        cr = self.c_plugin_inst.compute_resource
-        token = pfcon.Client.get_auth_token(cr.compute_auth_url, cr.compute_user,
-                                            cr.compute_password)
-        self.pfcon_client.set_auth_token(token)
-        cr.compute_auth_token = token
-        cr.save()
-
-    def _submit(self, job_type: JobType, job_id: str, job_descriptors: dict, 
-                dfile: io.BytesIO | None = None, timeout: int = 200) -> dict:
-        """
-        Submit job to a remote pfcon service.
-        """
-        try:
-            d_resp = self.pfcon_client.submit_job(job_type, job_id, job_descriptors, 
-                                                  dfile, timeout)
-        except PfconRequestInvalidTokenException:
-            logger.info(f'Auth token has expired while submitting {job_type} job '
-                        f'{job_id} to pfcon url -->{self.pfcon_client.url}<--')
-            self._refresh_compute_resource_auth_token()
-            d_resp = self.pfcon_client.submit_job(job_type, job_id, job_descriptors, 
-                                                  dfile, timeout)
-        except PfconRequestException:
-            # FIXME HACK
-            # Under some conditions, the requests library will produce a
-            # "Connection Aborted" error instead of a 401 response. This happens when
-            # pfcon responds eagerly to an invalid token and closes the connection.
-            # The temporary workaround is to catch a wider range of Exceptions here.
-            # Ideally we only want to try again in the event that we know the token is
-            # invalid, PfconRequestInvalidTokenException, however this exception
-            # is not correctly raised in all the situations where it should be.
-            #
-            logger.exception(f'Error while submitting {job_type} job {job_id} to pfcon '
-                             f'url -->{self.pfcon_client.url}<--, auth token might have '
-                             f'expired, will try refreshing token and resubmitting job')
-            self._refresh_compute_resource_auth_token()
-            d_resp = self.pfcon_client.submit_job(job_type, job_id, job_descriptors, 
-                                                  dfile, timeout)
-        return d_resp
-
-    def _get_status(self, job_type: JobType, job_id: str, timeout: int = 100) -> dict:
-        """
-        Get job status from a remote pfcon service.
-        """
-        try:
-            d_resp = self.pfcon_client.get_job_status(job_type, job_id, timeout)
-        except PfconRequestInvalidTokenException:
-            logger.info(f'Auth token has expired while getting status for {job_type} job '
-                        f'{job_id} from pfcon url -->{self.pfcon_client.url}<--')
-            self._refresh_compute_resource_auth_token()
-            d_resp = self.pfcon_client.get_job_status(job_type, job_id, timeout)
-        except PfconRequestException:
-            # FIXME HACK
-            # Same as in above method.
-            #
-            logger.exception(f'Error while getting status for {job_type} job {job_id} '
-                             f'from pfcon url -->{self.pfcon_client.url}<--, auth token '
-                             f'might have expired, will try refreshing token and '
-                             f'resubmitting job status request')
-            self._refresh_compute_resource_auth_token()
-            d_resp = self.pfcon_client.get_job_status(job_type, job_id, timeout)
-        return d_resp
-
-    def _delete(self, job_type: JobType, job_id: str, timeout: int = 200):
-        """
-        Delete a job from a remote pfcon service.
-        """
-        try:
-            self.pfcon_client.delete_job(job_type, job_id, timeout)
-        except PfconRequestInvalidTokenException:
-            logger.info(f'Auth token has expired while requesting to delete {job_type} '
-                        f'job {job_id} from pfcon url -->{self.pfcon_client.url}<--')
-            self._refresh_compute_resource_auth_token()
-            self.pfcon_client.delete_job(job_type, job_id, timeout)
-        except PfconRequestException:
-            # FIXME HACK
-            # Same as in above method.
-            #
-            logger.exception(f'Error while requesting to delete {job_type} job {job_id} '
-                             f'from pfcon url -->{self.pfcon_client.url}<--, auth token '
-                             f'might have expired, will try refreshing token and '
-                             f'resubmitting job delete request')
-            self._refresh_compute_resource_auth_token()
-            self.pfcon_client.delete_job(job_type, job_id, timeout)
-
     def schedule_remote_cleanup(self):
         """
         Schedule a remote cleanup operation to delete storeBase data and all containers
@@ -292,8 +178,104 @@ class PluginInstanceJob(abc.ABC):
                 logger.error(f'[CODE12,{job_id}]: Error deleting {job_type} container '
                              f'from pfcon at url -->{self.pfcon_client.url}<--')
                 all_succeeded = False
-
         return all_succeeded
+    
+    def _refresh_compute_resource_auth_token(self):
+        """
+        Get a new auth token from a remote pfcon service and update the DB.
+        """
+        cr = self.c_plugin_inst.compute_resource
+        token = pfcon.Client.get_auth_token(cr.compute_auth_url, cr.compute_user,
+                                            cr.compute_password)
+        self.pfcon_client.set_auth_token(token)
+        cr.compute_auth_token = token
+        cr.save()
+
+    def _submit(self, job_type: JobType, job_id: str, job_descriptors: dict, 
+                dfile: io.BytesIO | None = None, timeout: int = 200) -> dict:
+        """
+        Submit job to a remote pfcon service.
+        """
+        try:
+            d_resp = self.pfcon_client.submit_job(job_type, job_id, job_descriptors, 
+                                                  dfile, timeout)
+        except PfconRequestInvalidTokenException:
+            logger.info(f'Auth token has expired while submitting {job_type} job '
+                        f'{job_id} to pfcon url -->{self.pfcon_client.url}<--')
+            self._refresh_compute_resource_auth_token()
+            d_resp = self.pfcon_client.submit_job(job_type, job_id, job_descriptors, 
+                                                  dfile, timeout)
+        except PfconRequestException:
+            if self.pfcon_client.requires_copy_job:
+                raise
+            else:  # legacy behavior
+                # FIXME HACK
+                # Under some conditions, the requests library will produce a
+                # "Connection Aborted" error instead of a 401 response. This happens when
+                # pfcon responds eagerly to an invalid token and closes the connection.
+                # The temporary workaround is to catch a wider range of Exceptions here.
+                # Ideally we only want to try again in the event that we know the token is
+                # invalid, PfconRequestInvalidTokenException, however this exception
+                # is not correctly raised in all the situations where it should be.
+                #
+                logger.exception(f'Error while submitting {job_type} job {job_id} to pfcon '
+                                f'url -->{self.pfcon_client.url}<--, auth token might have '
+                                f'expired, will try refreshing token and resubmitting job')
+                self._refresh_compute_resource_auth_token()
+                d_resp = self.pfcon_client.submit_job(job_type, job_id, job_descriptors, 
+                                                    dfile, timeout)
+        return d_resp
+
+    def _get_status(self, job_type: JobType, job_id: str, timeout: int = 100) -> dict:
+        """
+        Get job status from a remote pfcon service.
+        """
+        try:
+            d_resp = self.pfcon_client.get_job_status(job_type, job_id, timeout)
+        except PfconRequestInvalidTokenException:
+            logger.info(f'Auth token has expired while getting status for {job_type} job '
+                        f'{job_id} from pfcon url -->{self.pfcon_client.url}<--')
+            self._refresh_compute_resource_auth_token()
+            d_resp = self.pfcon_client.get_job_status(job_type, job_id, timeout)
+        except PfconRequestException:
+            if self.pfcon_client.requires_copy_job:
+                raise
+            else:  # legacy behavior
+                # FIXME HACK
+                # Same as in above method.
+                #
+                logger.exception(f'Error while getting status for {job_type} job {job_id} '
+                                f'from pfcon url -->{self.pfcon_client.url}<--, auth token '
+                                f'might have expired, will try refreshing token and '
+                                f'resubmitting job status request')
+                self._refresh_compute_resource_auth_token()
+                d_resp = self.pfcon_client.get_job_status(job_type, job_id, timeout)
+        return d_resp
+
+    def _delete(self, job_type: JobType, job_id: str, timeout: int = 200):
+        """
+        Delete a job from a remote pfcon service.
+        """
+        try:
+            self.pfcon_client.delete_job(job_type, job_id, timeout)
+        except PfconRequestInvalidTokenException:
+            logger.info(f'Auth token has expired while requesting to delete {job_type} '
+                        f'job {job_id} from pfcon url -->{self.pfcon_client.url}<--')
+            self._refresh_compute_resource_auth_token()
+            self.pfcon_client.delete_job(job_type, job_id, timeout)
+        except PfconRequestException:
+            if self.pfcon_client.requires_copy_job:
+                raise
+            else:  # legacy behavior
+                # FIXME HACK (for legacy storage)
+                # Same as in above method.
+                #
+                logger.exception(f'Error while requesting to delete {job_type} job {job_id} '
+                                f'from pfcon url -->{self.pfcon_client.url}<--, auth token '
+                                f'might have expired, will try refreshing token and '
+                                f'resubmitting job delete request')
+                self._refresh_compute_resource_auth_token()
+                self.pfcon_client.delete_job(job_type, job_id, timeout)
 
     def _job_has_timeout(self) -> bool:
         """

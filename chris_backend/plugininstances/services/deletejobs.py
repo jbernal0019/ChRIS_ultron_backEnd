@@ -145,9 +145,12 @@ class PluginInstanceDeleteJob(PluginInstanceJob):
 
         if self.delete_all_remote_containers():
             self.c_plugin_inst.remote_cleanup_status = 'complete'
-        # else: stays 'deletingContainers' for periodic task retry
 
-        self.c_plugin_inst.save(update_fields=['remote_cleanup_status'])
+            if self.c_plugin_inst.status == 'cancelled':
+                self._cleanup_plugin_instance_output_dir()
+
+            self.save_plugin_instance_final_status()      
+        # else: stays 'deletingContainers' for periodic task retry
 
     def handle_finished_with_error_status(self):
         """
@@ -171,6 +174,28 @@ class PluginInstanceDeleteJob(PluginInstanceJob):
 
         self._increment_retry_or_fail()
 
+    def save_plugin_instance_final_status(self):
+        """
+        Set the plugin instance's output folder permissions recursively and log and
+        save the instance's final status to the DB.
+        """
+        job_id = self.str_job_id
+        logger.info(f"Setting output folder's permissions for job {job_id} ...")
+
+        for group in self.c_plugin_inst.feed.shared_groups.all():
+            self.c_plugin_inst.output_folder.parent.grant_group_permission(group, 'w')
+
+        for user in self.c_plugin_inst.feed.shared_users.all():
+            self.c_plugin_inst.output_folder.parent.grant_user_permission(user, 'w')
+
+        if self.c_plugin_inst.feed.public:
+            self.c_plugin_inst.output_folder.parent.grant_public_access()
+
+        logger.info(f"Saving plugin instance final status for job {job_id} as "
+                    f"'{self.c_plugin_inst.status}'")
+        
+        self.c_plugin_inst.save()
+        
     def _increment_retry_or_fail(self):
         """
         Increment the remote cleanup retry count. If it exceeds the max, mark cleanup
@@ -185,8 +210,27 @@ class PluginInstanceDeleteJob(PluginInstanceJob):
                          f'exceeded max retries, marking cleanup as failed')
             
             self.c_plugin_inst.remote_cleanup_status = 'failed'
-            self.c_plugin_inst.save(update_fields=['remote_cleanup_status',
-                                                    'remote_cleanup_retry_count'])
+
+            if self.c_plugin_inst.status == 'cancelled':
+                self._cleanup_plugin_instance_output_dir()
+            self.save_plugin_instance_final_status()
         else:
             self.c_plugin_inst.save(update_fields=['remote_cleanup_retry_count'])
             self.run()  # try resubmission
+
+    def _cleanup_plugin_instance_output_dir(self):
+        """
+        Clean up the plugin instance output directory by deleting all files and folders 
+        under it. This is needed to remove any orphan files that might be left in the
+        output dir.
+        """
+        outputfolder = self.c_plugin_inst.output_folder
+        
+        for folder in outputfolder.children.all():
+            folder.delete()
+        for file in outputfolder.files.all():
+            file.delete()
+        for link_file in outputfolder.link_files.all():
+            link_file.delete()
+
+        self.storage_manager.delete_path(outputfolder.path)

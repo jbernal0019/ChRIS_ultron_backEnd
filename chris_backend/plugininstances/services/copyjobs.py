@@ -59,7 +59,9 @@ class PluginInstanceCopyJob(PluginInstanceJob):
         except Exception as e:
             logger.error(f'[CODE01,{job_id}]: Error creating copy job, detail: {str(e)}')
             self.c_plugin_inst.status = 'cancelled'  # giving up
-            self.save_plugin_instance_final_status()
+            self.c_plugin_inst.error_code = 'CODE01'
+            self.c_plugin_inst.save(update_fields=['status', 'error_code'])
+            self.schedule_remote_cleanup()
             return
 
         # create job description dictionary
@@ -86,9 +88,16 @@ class PluginInstanceCopyJob(PluginInstanceJob):
             logger.error(f'[CODE01,{job_id}]: Error submitting copy job to pfcon url '
                          f'-->{pfcon_url}<--, detail: {str(e)}')
             
-            self.c_plugin_inst.error_code = 'CODE01'
-            self.c_plugin_inst.status = 'cancelled'  # giving up
-            self.save_plugin_instance_final_status()
+            self.c_plugin_inst.copy_retry_count += 1
+
+            if self.c_plugin_inst.copy_retry_count > PluginInstance.MAX_COPY_RETRIES:
+                self.c_plugin_inst.error_code = 'CODE01'
+                self.c_plugin_inst.status = 'cancelled'  # giving up
+                self.c_plugin_inst.save(update_fields=['status', 'error_code'])
+                self.schedule_remote_cleanup()
+            else:
+                self.c_plugin_inst.save(update_fields=['copy_retry_count'])
+                self.run()  # retry
         else:
             logger.info(f'Successfully submitted copy job {job_id} to pfcon url '
                         f'-->{pfcon_url}<--, response: {json.dumps(d_resp, indent=4)}')
@@ -110,13 +119,7 @@ class PluginInstanceCopyJob(PluginInstanceJob):
         the job is cancelled. Otherwise the job's execution status is fetched from the 
         remote.
         """
-        current_status = self.c_plugin_inst.status
-
-        if current_status in ('created', 'waiting'):
-
-            if self.c_plugin_inst.summary['pushPath']['status']:
-                return current_status
-
+        if self.c_plugin_inst.status == 'copying':
             job_id = self.str_job_id
 
             if self._job_has_timeout():
@@ -134,7 +137,7 @@ class PluginInstanceCopyJob(PluginInstanceJob):
             except PfconRequestException as e:
                 logger.error(f'[CODE02,{job_id}]: Error getting copy job status at pfcon '
                              f'url -->{pfcon_url}<--, detail: {str(e)}')
-                return self.c_plugin_inst.status  # return, CUBE will retry later
+                return self.c_plugin_inst.status  # return, periodic task will retry later
 
             logger.info(f'Successful job status response from pfcon url -->{pfcon_url}<--'
                         f' for copy job {job_id}: {json.dumps(d_resp, indent=4)}')
@@ -142,7 +145,7 @@ class PluginInstanceCopyJob(PluginInstanceJob):
             status = d_resp['compute']['status']
             logger.info(f'Current copy job {job_id} remote status = {status}')
             logger.info(f'Current copy job {job_id} plugin instance DB status = '
-                        f'{current_status}')
+                        f'{self.c_plugin_inst.status}')
 
             summary = self.get_job_status_summary(d_resp)
             self.c_plugin_inst.summary = summary
@@ -152,7 +155,7 @@ class PluginInstanceCopyJob(PluginInstanceJob):
             # only update (atomically) if still in copy phase to avoid concurrency problems
             PluginInstance.objects.filter(
                 id=self.c_plugin_inst.id,
-                status=current_status).update(summary=summary, raw=raw)
+                status=self.c_plugin_inst.status).update(summary=summary, raw=raw)
 
             if status == 'finishedSuccessfully':
                 self.handle_finished_successfully_status()
@@ -168,7 +171,7 @@ class PluginInstanceCopyJob(PluginInstanceJob):
         to cancel job and schedules remote cleanup.
         """
         self.c_plugin_inst.status = 'cancelled'
-        self.save_plugin_instance_final_status()
+        self.c_plugin_inst.save(update_fields=['status'])
         self.schedule_remote_cleanup()
 
     def delete(self):
@@ -250,7 +253,11 @@ class PluginInstanceCopyJob(PluginInstanceJob):
         
         # data successfully copied so update instance summary
         self.c_plugin_inst.summary['pushPath']['status'] = True
-        self.c_plugin_inst.save(update_fields=['summary'])
+        now = timezone.now()
+        self.c_plugin_inst.start_date = now  # save scheduling date
+        self.c_plugin_inst.end_date = now
+        self.c_plugin_inst.status = 'scheduled'
+        self.c_plugin_inst.save()
         plg_inst_app_job = PluginInstanceAppJob(self.c_plugin_inst)
         plg_inst_app_job.run()
 
@@ -259,25 +266,32 @@ class PluginInstanceCopyJob(PluginInstanceJob):
         Handle the 'finishedWithError' status returned by the remote compute.
         """
         job_id = self.str_job_id
-        self.c_plugin_inst.status = 'cancelled'
 
         logger.error(f'[CODE18,{job_id}]: Error while running copy job, remote compute '
                      f'returned finishedWithError status for job {job_id}')
         
+        self.c_plugin_inst.status = 'cancelled'
         self.c_plugin_inst.error_code = 'CODE18'
-        self.save_plugin_instance_final_status()
+        self.c_plugin_inst.save(update_fields=['status', 'error_code'])
         self.schedule_remote_cleanup()
 
     def handle_undefined_status(self):
         """
         Handle the 'undefined' status returned by the remote compute.
         """
-        job_id = self.str_job_id
-        self.c_plugin_inst.status = 'cancelled'
+        self.c_plugin_inst.copy_retry_count += 1
 
-        logger.error(f'[CODE18,{job_id}]: Error while running copy job, remote compute '
-                     f'returned undefined status for job {job_id}')
-        
-        self.c_plugin_inst.error_code = 'CODE18'
-        self.save_plugin_instance_final_status()
-        self.schedule_remote_cleanup()
+        if self.c_plugin_inst.copy_retry_count > PluginInstance.MAX_COPY_RETRIES:
+            job_id = self.str_job_id
+
+            logger.error(f'[CODE18,{job_id}]: Error while running copy job, remote '
+                        f'compute returned undefined status for job {job_id} and '
+                        f'exceeded max copy retries')
+            
+            self.c_plugin_inst.status = 'cancelled'
+            self.c_plugin_inst.error_code = 'CODE18'
+            self.c_plugin_inst.save(update_fields=['status', 'error_code'])
+            self.schedule_remote_cleanup()
+        else:
+            self.c_plugin_inst.save(update_fields=['copy_retry_count'])
+            self.run()  # retry

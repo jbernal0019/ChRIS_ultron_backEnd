@@ -20,7 +20,7 @@ def run_if_ready(plg_inst, previous):
         all_parents_finished = True
 
         for parent in parents:
-            if parent.status in ('created', 'waiting', 'scheduled',
+            if parent.status in ('created', 'waiting', 'copying', 'scheduled',
                                  'registeringFiles', 'started'):
                 plg_inst.set_status('waiting')
                 all_parents_finished = False
@@ -32,6 +32,7 @@ def run_if_ready(plg_inst, previous):
 
         if all_parents_finished:
             if plg_inst.compute_resource.compute_requires_copy_job:
+                plg_inst.set_status('copying')
                 run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceCopyJob')
             else:
                 plg_inst.set_status('scheduled')
@@ -39,12 +40,13 @@ def run_if_ready(plg_inst, previous):
 
     elif previous is None or previous.status == 'finishedSuccessfully':
         if plg_inst.compute_resource.compute_requires_copy_job:
+            plg_inst.set_status('copying')
             run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceCopyJob')
         else:
             plg_inst.set_status('scheduled')
             run_plugin_instance_job.delay(plg_inst.id, 'PluginInstanceAppJob')
 
-    elif previous.status in ('created', 'waiting', 'scheduled',
+    elif previous.status in ('created', 'copying', 'waiting', 'scheduled',
                              'registeringFiles', 'started'):
         plg_inst.set_status('waiting')
 
