@@ -9,6 +9,10 @@
 # The syntax and usage of `justfile` is similar to Makefile of GNU Make.
 # For more information, see https://just.systems/man/en/chapter_1.html
 
+# Storage mode: "fslink" (default) or "swift" (uses Swift object storage).
+# Usage: just storage=swift dev
+storage := "fslink"
+
 # Start the ChRIS backend in development mode, and attach to the live-reloading server.
 [group('(1) start-up')]
 dev: chrisomatic attach
@@ -115,7 +119,7 @@ run +command:
 # docker-compose ... helper function.
 [group('(4) docker-compose')]
 docker-compose +command:
-    env UID=$(id -u) GID=$(id -g) DOCKER_SOCK="$(just get-socket)" $(just get-engine) compose {{ command }}
+    env UID=$(id -u) GID=$(id -g) DOCKER_SOCK="$(just get-socket)" $(just get-engine) compose {{ if storage == "swift" { "-f docker-compose.yml -f docker-compose_swift.yml" } else { "" } }} {{ command }}
 
 # Get the container engine to use (docker or podman)
 [group('helper function')]
