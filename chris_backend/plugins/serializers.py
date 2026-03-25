@@ -18,9 +18,9 @@ class ComputeResourceSerializer(serializers.HyperlinkedModelSerializer):
                                              write_only=True)
     compute_auth_token = serializers.CharField(max_length=500, write_only=True,
                                                required=False)
-    compute_innetwork = serializers.BooleanField(required=False, default=True)
-    compute_requires_copy_job = serializers.BooleanField(required=False, default=True)
-    compute_requires_upload_job = serializers.BooleanField(required=False, default=False)
+    compute_innetwork = serializers.ReadOnlyField()
+    compute_requires_copy_job = serializers.ReadOnlyField()
+    compute_requires_upload_job = serializers.ReadOnlyField()
 
     class Meta:
         model = ComputeResource
@@ -61,12 +61,7 @@ class ComputeResourceSerializer(serializers.HyperlinkedModelSerializer):
                 {'non_field_errors': [f"Could not register the compute resource, "
                                       f"detail: {str(e)}."]})
 
-        compute_innetwork = data.get('compute_innetwork', True)
-
-        if compute_innetwork != d_resp['pfcon_innetwork']:
-            raise serializers.ValidationError({
-                'compute_innetwork': ["This field must match the remote compute "
-                                      "resource configuration."]})
+        compute_innetwork = d_resp['pfcon_innetwork']
 
         if compute_innetwork and settings.STORAGE_ENV != d_resp['storage_env']:
             raise serializers.ValidationError(
@@ -74,17 +69,9 @@ class ComputeResourceSerializer(serializers.HyperlinkedModelSerializer):
                                       "match this server's STORAGE_ENV setting when "
                                       "configured in-network."]})
 
-        compute_requires_copy_job = data.get('compute_requires_copy_job', True)
-        compute_requires_upload_job = data.get('compute_requires_upload_job', False)
-
-        if compute_requires_copy_job != d_resp['requires_copy_job']:
-            raise serializers.ValidationError({
-                'compute_requires_copy_job': ["This field must match the remote compute "
-                                              "resource configuration."]})
-        if compute_requires_upload_job != d_resp['requires_upload_job']:
-            raise serializers.ValidationError({
-                'compute_requires_upload_job': ["This field must match the remote compute"
-                                                " resource configuration."]})
+        data['compute_innetwork'] = compute_innetwork
+        data['compute_requires_copy_job'] = d_resp['requires_copy_job']
+        data['compute_requires_upload_job'] = d_resp['requires_upload_job']
         return data
 
     def to_representation(self, instance):
