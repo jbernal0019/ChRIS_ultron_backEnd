@@ -64,19 +64,19 @@ class PluginInstanceCopyJob(PluginInstanceJob):
             self.schedule_remote_cleanup()
             return
 
+        output_dir = self.c_plugin_inst.get_output_path()
+
         # create job description dictionary
         job_descriptors = {
             'cpu_limit': self.c_plugin_inst.cpu_limit,
             'memory_limit': self.c_plugin_inst.memory_limit,
+            'input_dirs': inputdirs,
+            'output_dir': output_dir
         }
 
-        output_dir = self.c_plugin_inst.get_output_path()
-
-        job_descriptors['input_dirs'] = inputdirs
-        job_descriptors['output_dir'] = output_dir
-
-        # remote pfcon requires both the input and output dirs to exist
-        os.makedirs(os.path.join(settings.MEDIA_ROOT, output_dir), exist_ok=True)
+        if self.storage_env in ('filesystem', 'fslink'):
+            # remote pfcon requires both the input and output dirs to exist
+            os.makedirs(os.path.join(settings.MEDIA_ROOT, output_dir), exist_ok=True)
 
         pfcon_url = self.pfcon_client.url
 

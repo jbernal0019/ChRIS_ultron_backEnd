@@ -228,9 +228,9 @@ class PluginInstanceDeleteJob(PluginInstanceJob):
         
         for folder in outputfolder.children.all():
             folder.delete()
-        for file in outputfolder.files.all():
+        for file in outputfolder.chris_files.all():
             file.delete()
-        for link_file in outputfolder.link_files.all():
+        for link_file in outputfolder.chris_link_files.all():
             link_file.delete()
 
         self.storage_manager.delete_path(outputfolder.path)

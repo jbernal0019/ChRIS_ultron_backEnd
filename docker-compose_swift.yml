@@ -8,28 +8,28 @@ services:
       STORAGE_ENV: "swift"
     depends_on:
       swift_service:
-        condition: service_healthy
+        condition: service_started
 
   worker-mains:
     environment:
       STORAGE_ENV: "swift"
     depends_on:
       swift_service:
-        condition: service_healthy
+        condition: service_started
 
   worker-periodic:
     environment:
       STORAGE_ENV: "swift"
     depends_on:
       swift_service:
-        condition: service_healthy
+        condition: service_started
 
   celery-scheduler:
     environment:
       STORAGE_ENV: "swift"
     depends_on:
       swift_service:
-        condition: service_healthy
+        condition: service_started
 
   pfcon:
     environment:
@@ -40,7 +40,7 @@ services:
       SWIFT_CONTAINER_NAME: "users"
     depends_on:
       swift_service:
-        condition: service_healthy
+        condition: service_started
 
   swift_service:
     image: ${SWIFT_IMAGE:-ghcr.io/fnndsc/docker-swift-onlyone}
@@ -54,12 +54,6 @@ services:
       - "8080:8080"
     networks:
       - local
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/auth/v1.0"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
 
 volumes:
   swift_storage:

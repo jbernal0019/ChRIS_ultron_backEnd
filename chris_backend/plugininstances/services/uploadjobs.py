@@ -38,6 +38,8 @@ class PluginInstanceUploadJob(PluginInstanceJob):
 
         # create job description dictionary
         job_descriptors = {
+            'cpu_limit': self.c_plugin_inst.cpu_limit,
+            'memory_limit': self.c_plugin_inst.memory_limit,
             'job_output_path': self.c_plugin_inst.get_output_path()
         }
 
@@ -203,7 +205,7 @@ class PluginInstanceUploadJob(PluginInstanceJob):
                 if d_resp['compute']['status'] == 'finishedSuccessfully':
                     app_job.register_output_files_on_success()
                 elif d_resp['compute']['status'] == 'finishedWithError':
-                    app_job.register_output_files_on_error()()
+                    app_job.register_output_files_on_error()
 
     def handle_finished_with_error_status(self):
         """
