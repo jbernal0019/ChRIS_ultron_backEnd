@@ -13,9 +13,11 @@ from django.conf import settings
 from rest_framework import status
 
 from celery.contrib.testing.worker import start_worker
+import uuid
+
 from pfconclient import client as pfcon
 
-from core.models import ChrisFolder
+from core.models import ChrisFolder, ChrisInstance
 from core.celery import app as celery_app
 from core.celery import task_routes
 from core.storage import connect_storage
@@ -37,6 +39,12 @@ class ViewTests(TestCase):
     def setUp(self):
         # avoid cluttered console output (for instance logging all the http requests)
         logging.disable(logging.WARNING)
+
+        # use a unique job_id_prefix to avoid pfcon job ID collisions with
+        # stale jobs from prior test runs
+        chris_inst = ChrisInstance.load()
+        chris_inst.job_id_prefix = f'test-{uuid.uuid4().hex[:8]}-'
+        chris_inst.save(update_fields=['job_id_prefix'])
 
         # superuser chris (owner of root and top-level folders)
         self.chris_username = 'chris'
@@ -113,7 +121,31 @@ class TasksViewTests(TransactionTestCase):
         celery_app.conf.update(task_routes=task_routes)
         logging.disable(logging.NOTSET)
 
+    def tearDown(self):
+        # purge any unstarted Celery tasks then wait for in-flight tasks to finish
+        # before the TransactionTestCase DB truncation to prevent spurious errors
+        # from stale cleanup tasks finding missing DB records
+        try:
+            celery_app.control.purge()
+        except Exception:
+            pass
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            try:
+                active = celery_app.control.inspect(timeout=1).active() or {}
+                if all(len(tasks) == 0 for tasks in active.values()):
+                    break
+            except Exception:
+                break
+            time.sleep(0.5)
+        super().tearDown()
+
     def setUp(self):
+        # use a unique job_id_prefix to avoid pfcon job ID collisions with
+        # stale jobs from prior test runs
+        chris_inst = ChrisInstance.load()
+        chris_inst.job_id_prefix = f'test-{uuid.uuid4().hex[:8]}-'
+        chris_inst.save(update_fields=['job_id_prefix'])
 
         # create superuser chris (owner of root folders)
         self.chris_username = 'chris'
@@ -377,12 +409,12 @@ class PluginInstanceListViewTests(TasksViewTests):
         pl_inst.feed.grant_user_permission(user)
         self.assertTrue(pl_inst.output_folder.has_user_permission(user, 'w'))
 
-        # poll copy job status until copy finishes and app job starts
+        # the Celery worker submitted the copy job; poll status until app job starts
+        copy_job = PluginInstanceCopyJob(pl_inst)
         for _ in range(20):
             time.sleep(3)
             pl_inst.refresh_from_db()
             if pl_inst.status == 'copying':
-                copy_job = PluginInstanceCopyJob(pl_inst)
                 copy_job.check_exec_status()
                 pl_inst.refresh_from_db()
             if pl_inst.status == 'started':
@@ -410,8 +442,8 @@ class PluginInstanceListViewTests(TasksViewTests):
         self.assertEqual(pl_inst.status, 'finishedSuccessfully')
 
         # make sure output file was created in storage
-        self.assertTrue(self.storage_manager.obj_exists(pl_inst.output_folder.path +
-                                                        '/test.txt'))
+        output_path = pl_inst.output_folder.path
+        self.assertTrue(self.storage_manager.obj_exists(output_path + '/test.txt'))
 
         # delete files from storage
         self.storage_manager.delete_path(pl_inst.output_folder.path)
@@ -476,13 +508,13 @@ class PluginInstanceListViewTests(TasksViewTests):
                                     content_type=self.content_type)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
-        # poll copy job status until copy finishes and app job starts
+        # the Celery worker submitted the copy job; poll status until app job starts
         pl_inst = PluginInstance.objects.get(pk=response.data['id'])
+        copy_job = PluginInstanceCopyJob(pl_inst)
         for _ in range(20):
             time.sleep(3)
             pl_inst.refresh_from_db()
             if pl_inst.status == 'copying':
-                copy_job = PluginInstanceCopyJob(pl_inst)
                 copy_job.check_exec_status()
                 pl_inst.refresh_from_db()
             if pl_inst.status == 'started':
@@ -613,13 +645,13 @@ class PluginInstanceListViewTests(TasksViewTests):
                                     content_type=self.content_type)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
-        # poll copy job status until copy finishes and app job starts
+        # the Celery worker submitted the copy job; poll status until app job starts
         pl_inst = PluginInstance.objects.get(pk=response.data['id'])
+        copy_job = PluginInstanceCopyJob(pl_inst)
         for _ in range(20):
             time.sleep(3)
             pl_inst.refresh_from_db()
             if pl_inst.status == 'copying':
-                copy_job = PluginInstanceCopyJob(pl_inst)
                 copy_job.check_exec_status()
                 pl_inst.refresh_from_db()
             if pl_inst.status == 'started':
@@ -702,8 +734,12 @@ class PluginInstanceDetailViewTests(TasksViewTests):
         #     # check that the check_plugin_instance_exec_status task was called with appropriate args
         #     delay_mock.assert_called_with(self.pl_inst.id)
 
-    @tag('integration', 'error-pfcon')
+    @tag('integration')
     def test_integration_plugin_instance_detail_success(self):
+
+        # enable copy job flow for this integration test
+        self.compute_resource.compute_requires_copy_job = True
+        self.compute_resource.save(update_fields=['compute_requires_copy_job'])
 
         # add an FS plugin to the system
         plugin_parameters = [{'name': 'dir', 'type': 'path', 'action': 'store',
@@ -755,24 +791,33 @@ class PluginInstanceDetailViewTests(TasksViewTests):
             self.storage_manager.upload_obj(user_space_path + 'test.txt', f.read(),
                                           content_type='text/plain')
 
-        # create a plugin's instance
+        # create a plugin's instance in 'copying' status
         user = User.objects.get(username=self.username)
         (pl_inst, tf) = PluginInstance.objects.get_or_create(
-            title='test2', plugin=plugin, owner=user, status='scheduled',
+            title='test2', plugin=plugin, owner=user, status='copying',
             compute_resource=plugin.compute_resources.all()[0])
         PathParameter.objects.get_or_create(plugin_inst=pl_inst, plugin_param=pl_param,
                                             value=user_space_path)
         read_update_delete_url = reverse("plugininstance-detail",
                                          kwargs={"pk": pl_inst.id})
 
-        # run the plugin instance
-        plg_inst_app_job = PluginInstanceAppJob(pl_inst)
-        plg_inst_app_job.run()
+        # run the copy job then poll until the app job starts
+        copy_job = PluginInstanceCopyJob(pl_inst)
+        copy_job.run()
+        for _ in range(20):
+            time.sleep(3)
+            pl_inst.refresh_from_db()
+            if pl_inst.status == 'copying':
+                copy_job.check_exec_status()
+                pl_inst.refresh_from_db()
+            if pl_inst.status == 'started':
+                break
+        self.assertEqual(pl_inst.status, 'started')
 
-        # In the following we keep checking the status until the job ends with
-        # 'finishedSuccessfully'. The code runs in a lazy loop poll with a
-        # max number of attempts at 10 second intervals.
+        # poll the app job until it ends with 'finishedSuccessfully' while also
+        # checking the detail view response
         self.client.login(username=self.username, password=self.password)
+        plg_inst_app_job = PluginInstanceAppJob(pl_inst)
         maxLoopTries = 10
         currentLoop = 1
         b_checkAgain = True

@@ -3,6 +3,7 @@ import logging
 import os
 import io
 import time
+import uuid
 from unittest import mock
 
 from django.test import TestCase, tag
@@ -11,6 +12,7 @@ from django.conf import settings
 
 from pfconclient import client as pfcon
 
+from core.models import ChrisInstance
 from core.storage import connect_storage
 from plugins.models import PluginMeta, Plugin
 from plugins.models import PluginParameter
@@ -27,6 +29,12 @@ class PluginInstanceAppJobTests(TestCase):
     def setUp(self):
         # avoid cluttered console output (for instance logging all the http requests)
         logging.disable(logging.WARNING)
+
+        # use a unique job_id_prefix to avoid pfcon job ID collisions with
+        # stale jobs from prior test runs
+        chris_inst = ChrisInstance.load()
+        chris_inst.job_id_prefix = f'test-{uuid.uuid4().hex[:8]}-'
+        chris_inst.save(update_fields=['job_id_prefix'])
 
         # create superuser chris (owner of root folders)
         self.chris_username = 'chris'
@@ -111,9 +119,9 @@ class PluginInstanceAppJobTests(TestCase):
             pluginjobs.PluginInstanceAppJob._assemble_exec(None, 'rust_is_better_than_python', None)
         )
 
-    def test_mananger_can_run_registered_plugin_app(self):
+    def test_plugin_job_can_run_registered_plugin_app(self):
         """
-        Test whether the manager can run an already registered plugin app.
+        Test whether the plugin job can run an already registered plugin app.
         """
         with mock.patch.object(pluginjobs, 'json_zip2str',
                                return_value='raw') as json_zip2str_mock:
@@ -142,9 +150,9 @@ class PluginInstanceAppJobTests(TestCase):
             json_zip2str_mock.assert_called_once()
 
     @tag('integration', 'error-pfcon')
-    def test_integration_mananger_can_run_and_check_exec_status(self):
+    def test_integration_plugin_job_can_run_and_check_exec_status(self):
         """
-        Test whether the manager can run copy and plugin app jobs and check
+        Test whether the plugin job can run copy and plugin app jobs and check
         execution status.
         """
         self.compute_resource.compute_requires_copy_job = True
@@ -211,9 +219,9 @@ class PluginInstanceAppJobTests(TestCase):
         self.storage_manager.delete_obj(user_space_path + 'test.txt')
 
     @tag('integration')
-    def test_integration_mananger_can_register_output_files(self):
+    def test_integration_plugin_job_can_register_output_files(self):
         """
-        Test whether the manager can register output files.
+        Test whether the plugin job can register output files.
         """
         # create a plugin's instance
         user_space_path = 'home/%s/uploads/' % self.username
