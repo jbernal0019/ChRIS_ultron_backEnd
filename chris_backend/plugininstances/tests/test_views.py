@@ -24,6 +24,7 @@ from plugins.models import PluginMeta, Plugin, PluginParameter, ComputeResource
 from plugininstances.models import PluginInstance
 from plugininstances.models import PathParameter, FloatParameter
 from plugininstances.services.pluginjobs import PluginInstanceAppJob
+from plugininstances.services.copyjobs import PluginInstanceCopyJob
 from plugininstances import views
 
 
@@ -58,14 +59,15 @@ class ViewTests(TestCase):
         (self.compute_resource, tf) = ComputeResource.objects.get_or_create(
             name="host", compute_url=COMPUTE_RESOURCE_URL, compute_user=self.compute_user,
             compute_password=self.compute_password,
-            compute_innetwork=pfcon_client.pfcon_innetwork)
+            compute_innetwork=pfcon_client.pfcon_innetwork,
+            compute_requires_copy_job=False)
 
         # create users
         User.objects.create_user(username=self.other_username,
                                  password=self.other_password)
         User.objects.create_user(username=self.username,
                                  password=self.password)
-        
+
         # create two plugins
         (pl_meta, tf) = PluginMeta.objects.get_or_create(name='pacspull', type='fs')
         (plugin_fs, tf) = Plugin.objects.get_or_create(meta=pl_meta, version='0.1')
@@ -91,6 +93,13 @@ class TasksViewTests(TransactionTestCase):
         # route tasks to this worker by using the default 'celery' queue
         # that is exclusively used for the automated tests
         celery_app.conf.update(task_routes=None)
+        # purge any stale messages from the default queue before starting
+        # the worker, so leftover tasks from previous runs don't produce noise
+        try:
+            with celery_app.connection_for_write() as conn:
+                conn.default_channel.queue_purge('celery')
+        except Exception:
+            pass
         cls.celery_worker = start_worker(celery_app,
                                          concurrency=1,
                                          perform_ping_check=False)
@@ -127,7 +136,8 @@ class TasksViewTests(TransactionTestCase):
         (self.compute_resource, tf) = ComputeResource.objects.get_or_create(
             name="host", compute_url=COMPUTE_RESOURCE_URL, compute_user=self.compute_user,
             compute_password=self.compute_password,
-            compute_innetwork=pfcon_client.pfcon_innetwork)
+            compute_innetwork=pfcon_client.pfcon_innetwork,
+            compute_requires_copy_job=False)
 
         # create users
         User.objects.create_user(username=self.other_username,
@@ -182,8 +192,7 @@ class PluginInstanceListViewTests(TasksViewTests):
 
         # first test 'fs' plugin instance (has no previous plugin instance)
 
-        with mock.patch.object(views.run_plugin_instance, 'delay',
-                               return_value=None) as delay_mock:
+        with mock.patch('plugininstances.utils.run_plugin_instance_job') as run_job_mock:
             # make API request
             self.client.login(username=self.username, password=self.password)
             response = self.client.post(self.create_read_url, data=self.post,
@@ -191,7 +200,7 @@ class PluginInstanceListViewTests(TasksViewTests):
             self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
             # check that the run_plugin_instance task was called with appropriate args
-            delay_mock.assert_called_with(response.data['id'])
+            run_job_mock.delay.assert_called_with(response.data['id'], 'PluginInstanceAppJob')
             self.assertEqual(response.data['status'], 'scheduled')
 
         # now test 'ds' plugin instance (has previous plugin instance)
@@ -204,41 +213,38 @@ class PluginInstanceListViewTests(TasksViewTests):
 
         previous_plg_inst.status = 'finishedSuccessfully'
         previous_plg_inst.save()
-        with mock.patch.object(views.run_plugin_instance, 'delay',
-                               return_value=None) as delay_mock:
+        with mock.patch('plugininstances.utils.run_plugin_instance_job') as run_job_mock:
             self.client.login(username=self.username, password=self.password)
             response = self.client.post(create_read_url, data=post,
                                         content_type=self.content_type)
             self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
             # check that the run_plugin_instance task was called with appropriate args
-            delay_mock.assert_called_with(response.data['id'])
+            run_job_mock.delay.assert_called_with(response.data['id'], 'PluginInstanceAppJob')
             self.assertEqual(response.data['status'], 'scheduled')
 
         previous_plg_inst.status = 'started'
         previous_plg_inst.save()
-        with mock.patch.object(views.run_plugin_instance, 'delay',
-                               return_value=None) as delay_mock:
+        with mock.patch('plugininstances.utils.run_plugin_instance_job') as run_job_mock:
             self.client.login(username=self.username, password=self.password)
             response = self.client.post(create_read_url, data=post,
                                         content_type=self.content_type)
             self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
             # check that the run_plugin_instance task was not called
-            delay_mock.assert_not_called()
+            run_job_mock.delay.assert_not_called()
             self.assertEqual(response.data['status'], 'waiting')
 
         previous_plg_inst.status = 'finishedWithError'
         previous_plg_inst.save()
-        with mock.patch.object(views.run_plugin_instance, 'delay',
-                               return_value=None) as delay_mock:
+        with mock.patch('plugininstances.utils.run_plugin_instance_job') as run_job_mock:
             self.client.login(username=self.username, password=self.password)
             response = self.client.post(create_read_url, data=post,
                                         content_type=self.content_type)
             self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
             # check that the run_plugin_instance task was not called
-            delay_mock.assert_not_called()
+            run_job_mock.delay.assert_not_called()
             self.assertEqual(response.data['status'], 'cancelled')
 
     def test_ts_plugin_instance_create_success(self):
@@ -271,45 +277,46 @@ class PluginInstanceListViewTests(TasksViewTests):
 
         parent_plg_inst.status = 'finishedSuccessfully'
         parent_plg_inst.save()
-        with mock.patch.object(views.run_plugin_instance, 'delay',
-                               return_value=None) as delay_mock:
+        with mock.patch('plugininstances.utils.run_plugin_instance_job') as run_job_mock:
             self.client.login(username=self.username, password=self.password)
             response = self.client.post(create_read_url, data=post,
                                         content_type=self.content_type)
             self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
             # check that the run_plugin_instance task was called with appropriate args
-            delay_mock.assert_called_with(response.data['id'])
+            run_job_mock.delay.assert_called_with(response.data['id'], 'PluginInstanceAppJob')
             self.assertEqual(response.data['status'], 'scheduled')
 
         parent_plg_inst.status = 'started'
         parent_plg_inst.save()
-        with mock.patch.object(views.run_plugin_instance, 'delay',
-                               return_value=None) as delay_mock:
+        with mock.patch('plugininstances.utils.run_plugin_instance_job') as run_job_mock:
             self.client.login(username=self.username, password=self.password)
             response = self.client.post(create_read_url, data=post,
                                         content_type=self.content_type)
             self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
             # check that the run_plugin_instance task was not called
-            delay_mock.assert_not_called()
+            run_job_mock.delay.assert_not_called()
             self.assertEqual(response.data['status'], 'waiting')
 
         parent_plg_inst.status = 'finishedWithError'
         parent_plg_inst.save()
-        with mock.patch.object(views.run_plugin_instance, 'delay',
-                               return_value=None) as delay_mock:
+        with mock.patch('plugininstances.utils.run_plugin_instance_job') as run_job_mock:
             self.client.login(username=self.username, password=self.password)
             response = self.client.post(create_read_url, data=post,
                                         content_type=self.content_type)
             self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
             # check that the run_plugin_instance task was not called
-            delay_mock.assert_not_called()
+            run_job_mock.delay.assert_not_called()
             self.assertEqual(response.data['status'], 'cancelled')
 
     @tag('integration')
     def test_integration_plugin_instance_create_success(self):
+
+        # enable copy job flow for this integration test
+        self.compute_resource.compute_requires_copy_job = True
+        self.compute_resource.save(update_fields=['compute_requires_copy_job'])
 
         # add an FS plugin to the system
         plugin_parameters = [{'name': 'dir', 'type': 'path', 'action': 'store',
@@ -370,12 +377,17 @@ class PluginInstanceListViewTests(TasksViewTests):
         pl_inst.feed.grant_user_permission(user)
         self.assertTrue(pl_inst.output_folder.has_user_permission(user, 'w'))
 
-        # instance must be 'started' before checking its status
-        for _ in range(10):
+        # poll copy job status until copy finishes and app job starts
+        for _ in range(20):
             time.sleep(3)
             pl_inst.refresh_from_db()
-            if pl_inst.status == 'started': break
-        self.assertEqual(pl_inst.status, 'started')  # instance must be started
+            if pl_inst.status == 'copying':
+                copy_job = PluginInstanceCopyJob(pl_inst)
+                copy_job.check_exec_status()
+                pl_inst.refresh_from_db()
+            if pl_inst.status == 'started':
+                break
+        self.assertEqual(pl_inst.status, 'started')
 
         # In the following we keep checking the status until the job ends with
         # 'finishedSuccessfully'. The code runs in a lazy loop poll with a
@@ -407,6 +419,10 @@ class PluginInstanceListViewTests(TasksViewTests):
 
     @tag('integration')
     def test_integration_plugin_instance_create_output_chris_link_success(self):
+
+        # enable copy job flow for this integration test
+        self.compute_resource.compute_requires_copy_job = True
+        self.compute_resource.save(update_fields=['compute_requires_copy_job'])
 
         # add an FS plugin with unextpath parameter to the system
         plugin_parameters = [{'name': 'dir', 'type': 'unextpath', 'action': 'store',
@@ -460,13 +476,18 @@ class PluginInstanceListViewTests(TasksViewTests):
                                     content_type=self.content_type)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
-        # instance must be 'started' before checking its status
+        # poll copy job status until copy finishes and app job starts
         pl_inst = PluginInstance.objects.get(pk=response.data['id'])
-        for _ in range(10):
+        for _ in range(20):
             time.sleep(3)
             pl_inst.refresh_from_db()
-            if pl_inst.status == 'started': break
-        self.assertEqual(pl_inst.status, 'started')  # instance must be started
+            if pl_inst.status == 'copying':
+                copy_job = PluginInstanceCopyJob(pl_inst)
+                copy_job.check_exec_status()
+                pl_inst.refresh_from_db()
+            if pl_inst.status == 'started':
+                break
+        self.assertEqual(pl_inst.status, 'started')
 
         # In the following we keep checking the status until the job ends with
         # 'finishedSuccessfully'. The code runs in a lazy loop poll with a
@@ -498,6 +519,10 @@ class PluginInstanceListViewTests(TasksViewTests):
 
     @tag('integration')
     def test_integration_ts_plugin_instance_create_success(self):
+        # enable copy job flow for this integration test
+        self.compute_resource.compute_requires_copy_job = True
+        self.compute_resource.save(update_fields=['compute_requires_copy_job'])
+
         # upload a file to the storage user's space
         with io.StringIO('Test file') as f:
             self.storage_manager.upload_obj(self.user_space_path + 'test.txt', f.read(),
@@ -588,13 +613,18 @@ class PluginInstanceListViewTests(TasksViewTests):
                                     content_type=self.content_type)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
-        # instance must be 'started' before checking its status
+        # poll copy job status until copy finishes and app job starts
         pl_inst = PluginInstance.objects.get(pk=response.data['id'])
-        for _ in range(10):
+        for _ in range(20):
             time.sleep(3)
             pl_inst.refresh_from_db()
-            if pl_inst.status == 'started': break
-        self.assertEqual(pl_inst.status, 'started')  # instance must be started
+            if pl_inst.status == 'copying':
+                copy_job = PluginInstanceCopyJob(pl_inst)
+                copy_job.check_exec_status()
+                pl_inst.refresh_from_db()
+            if pl_inst.status == 'started':
+                break
+        self.assertEqual(pl_inst.status, 'started')
 
         # In the following we keep checking the status until the job ends with
         # 'finishedSuccessfully'. The code runs in a lazy loop poll with a
@@ -776,8 +806,10 @@ class PluginInstanceDetailViewTests(TasksViewTests):
                                   {"name": "status", "value": "cancelled"}]}})
 
         self.client.login(username=self.username, password=self.password)
-        response = self.client.put(self.read_update_delete_url, data=put,
-                                   content_type=self.content_type)
+        with mock.patch.object(views.cancel_plugin_instance_job, 'delay',
+                               return_value=None):
+            response = self.client.put(self.read_update_delete_url, data=put,
+                                       content_type=self.content_type)
         self.assertContains(response, "Test instance")
         self.assertContains(response, "cancelled")
 
@@ -840,13 +872,14 @@ class PluginInstanceDetailViewTests(TasksViewTests):
 
         self.client.login(username=self.username, password=self.password)
 
-        with mock.patch.object(views.delete_plugin_instance, 'delay',
-                               return_value=None) as delay_mock:
-            response = self.client.delete(url)
-            self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        with mock.patch.object(views, 'cancel_plugin_instance_job'):
+            with mock.patch.object(views.delete_plugin_instance, 'delay',
+                                   return_value=None) as delay_mock:
+                response = self.client.delete(url)
+                self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
 
-            # check that the delete_plugin_instance task was called with appropriate args
-            delay_mock.assert_called_with(response.data['id'])
+                # check that the delete_plugin_instance task was called with appropriate args
+                delay_mock.assert_called_with(ds_inst.id)
 
     @tag('integration')
     def test_integration_plugin_instance_delete_success(self):
@@ -1069,14 +1102,13 @@ class PluginInstanceSplitListViewTests(ViewTests):
 
         self.fs_inst.status = 'finishedSuccessfully'
         self.fs_inst.save()
-        with mock.patch.object(views.run_plugin_instance, 'delay',
-                               return_value=None) as delay_mock:
+        with mock.patch('plugininstances.utils.run_plugin_instance_job') as run_job_mock:
 
             response = self.client.post(self.create_read_url, data=post,
                                         content_type=self.content_type)
             self.assertEqual(response.status_code, status.HTTP_201_CREATED)
             # check that the run_plugin_instance task was called with appropriate args
-            delay_mock.assert_called_once()
+            run_job_mock.delay.assert_called_once()
 
     def test_plugin_instance_split_list_success(self):
         self.client.login(username=self.username, password=self.password)

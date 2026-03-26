@@ -15,7 +15,7 @@ from core.storage import connect_storage
 from plugins.models import PluginMeta, Plugin
 from plugins.models import PluginParameter
 from plugininstances.models import PluginInstance, PathParameter, ComputeResource
-from plugininstances.services import pluginjobs
+from plugininstances.services import pluginjobs, copyjobs
 
 
 COMPUTE_RESOURCE_URL = settings.COMPUTE_RESOURCE_URL
@@ -69,7 +69,8 @@ class PluginInstanceAppJobTests(TestCase):
 
         (self.compute_resource, tf) = ComputeResource.objects.get_or_create(
             name="host", compute_url=COMPUTE_RESOURCE_URL, compute_user='pfcon',
-            compute_password='pfcon1234', compute_innetwork=pfcon_client.pfcon_innetwork)
+            compute_password='pfcon1234', compute_innetwork=pfcon_client.pfcon_innetwork,
+            compute_requires_copy_job=False)
 
         # create a plugin
         data = self.plg_meta_data.copy()
@@ -143,32 +144,49 @@ class PluginInstanceAppJobTests(TestCase):
     @tag('integration', 'error-pfcon')
     def test_integration_mananger_can_run_and_check_exec_status(self):
         """
-        Test whether the manager can check a plugin's app execution status.
+        Test whether the manager can run copy and plugin app jobs and check
+        execution status.
         """
+        self.compute_resource.compute_requires_copy_job = True
+        self.compute_resource.save(update_fields=['compute_requires_copy_job'])
+
         # upload a file to the storage user's space
         user_space_path = 'home/%s/uploads/' % self.username
         with io.StringIO('Test file') as f:
             self.storage_manager.upload_obj(user_space_path + 'test.txt', f.read(),
                                           content_type='text/plain')
 
-        # create a plugin's instance
+        # create a plugin's instance in 'copying' status
         user = User.objects.get(username=self.username)
         plugin = Plugin.objects.get(meta__name=self.plugin_fs_name)
         pl_inst = PluginInstance.objects.create(
-            plugin=plugin, owner=user, status='scheduled',
+            plugin=plugin, owner=user, status='copying',
             compute_resource=plugin.compute_resources.all()[0])
         pl_param = plugin.parameters.all()[0]
         PathParameter.objects.get_or_create(plugin_inst=pl_inst, plugin_param=pl_param,
                                             value=user_space_path)
 
-        # run the plugin instance
-        plg_inst_app_job = pluginjobs.PluginInstanceAppJob(pl_inst)
-        plg_inst_app_job.run()
+        # run the copy job
+        plg_inst_copy_job = copyjobs.PluginInstanceCopyJob(pl_inst)
+        plg_inst_copy_job.run()
+        self.assertEqual(pl_inst.status, 'copying')
+
+        # poll copy job status until it finishes and auto-transitions to app job
+        maxLoopTries = 10
+        currentLoop = 1
+        time.sleep(5)
+        while currentLoop <= maxLoopTries:
+            plg_inst_copy_job.check_exec_status()
+            if pl_inst.status == 'started':
+                break
+            time.sleep(5)
+            currentLoop += 1
         self.assertEqual(pl_inst.status, 'started')
 
         # In the following we keep checking the status until the job ends with
         # 'finishedSuccessfully'. The code runs in a lazy loop poll with a
         # max number of attempts at 10 second intervals.
+        plg_inst_app_job = pluginjobs.PluginInstanceAppJob(pl_inst)
         maxLoopTries = 10
         currentLoop = 1
         b_checkAgain = True
